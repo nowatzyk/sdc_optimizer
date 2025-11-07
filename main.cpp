@@ -3,6 +3,9 @@
 #include <math.h>
 #include <assert.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 const unsigned max_ln_length = 100000;      // We expect some very long lines...
 const unsigned max_ts = 128;                // Max number of time series
@@ -12,6 +15,100 @@ const double threshold_hyst = 0.01;         // Hysteresis to avoid noise induced
 
 const unsigned max_pks = 1024;              // needed to allocate arrays for peaks:
                                             // Peaks are located first and then analyzed
+                                            
+const char* csv_out_path = "/tmp/JoSim2csv_analyzer.csv";      // Output fifo from Josim to this program
+const char* cir_inp_path = "/tmp/JoSim2csv_analyzer.cir";      // Input fifo to Josim
+
+const unsigned spice_src_max_char = 1024;   // Max line length in spice source file
+
+class spice_deck {
+   unsigned     n_lines;                    // #of lines
+   unsigned     max_lines;                  // just for allocation purposes
+   char         **src;                      // The source file
+
+public:
+    spice_deck();                           // constructor
+    
+    int read_cir_file(const char *fn);      // Reads a spice deck from a file into memory
+    int write_cir_file(const char *fn);     // writes the spice deck to a file
+};
+
+spice_deck::spice_deck()
+//
+// Constructor
+//
+{
+    n_lines = 0;
+    max_lines = 1024;
+    src = (char **) malloc(sizeof(char *) * max_lines);
+}
+
+int spice_deck::read_cir_file(const char* fn)
+//
+// Reads the spice deck into memory
+// The intent is to supply it to JoSim multiple times, but with the ability to
+// change variable, parameters etc.
+// I need a tool for the design space exploration, so running JoSim manually gets old fast.
+//
+// Return codes:
+//   >= 0 : number of lines successfully read
+//     -1 : failed to open the file
+//
+{
+    FILE *inp = fopen(fn, "r");
+    if (inp == nullptr)
+        return -1;
+    
+    char buf[spice_src_max_char];
+    
+    while(fgets(buf, spice_src_max_char - 1, inp)) {
+
+        if (strlen(buf) > (spice_src_max_char - 2))  {
+            fprintf(stderr, "Line %u in %s is too long (increase spice_src_max_char)\n", n_lines + 1, fn);
+            exit(1);
+        }
+        
+        //
+        // Processing for parameter detection, etc. goes here
+        //
+        
+        if (n_lines >= max_lines) {
+            max_lines += max_lines / 2;         // Add 50%
+            src = (char **) realloc(src, sizeof(char *) * max_lines);
+        }
+        src[n_lines++] = strdup(buf);
+    }
+    
+    fclose(inp);
+    
+    return n_lines;
+}
+
+int spice_deck::write_cir_file(const char* fn)
+//
+// Write the spice deck to a file
+//
+{
+    FILE *out = fopen(fn, "w");
+    if (out == nullptr)
+        return -1;
+    
+    for (unsigned i = 0; i < n_lines; i++) {
+        //
+        // Edit the source line into a buffer here...
+        //
+        if (0 > fputs(src[i], out)) {    // some problem
+            fclose(out);
+            return -2;
+        }
+    }
+    
+    fclose(out);
+    return 0;
+}
+
+
+
 
 class time_series {
     char    *name;          // Name of this coumn
@@ -209,10 +306,57 @@ int locate_peaks(time_series *ts[], unsigned n_ts, const char *nm, double* &pka)
 int main(int argc, char *argv[])
 {
     FILE *inpf = stdin;
+    
+#ifdef _STAND_ALONE_
     if (argc == 2) {
         inpf = fopen(argv[1], "r");
         assert(inpf != nullptr);
     }
+#else
+    // Create the named pipes (FIFO)
+    if ((access(csv_out_path, F_OK) != 0) && (mkfifo(csv_out_path, 0666) == -1)) {
+        perror("mkfifo failed");
+        exit(1);
+    }
+    
+    if ((access(cir_inp_path, F_OK) != 0) && (mkfifo(cir_inp_path, 0666) == -1)) {
+        perror("mkfifo failed");
+        exit(1);
+    }
+    
+    if (argc != 2) {
+        fprintf(stderr, "csv_analyzer <spice source file>\n");
+        exit(1);
+    }
+    
+    spice_deck sd;
+    if (!sd.read_cir_file(argv[1])) {
+        fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
+        exit(1);
+    }
+
+    pid_t child_pid = fork();
+    if (child_pid == 0) {
+        //
+        // This is the child process
+        //
+        freopen("run.log", "w", stdout);
+        
+        int ie = execl("/usr/local/bin/josim-cli", "-a", "1", "-o", csv_out_path, cir_inp_path, nullptr);
+        perror("Failed to stat Josim");
+        exit(1);
+    }
+    
+    if (sd.write_cir_file(cir_inp_path)) {
+        fprintf(stderr, "failed to write the spice deck to JoSim\n");
+        exit(1);
+    }
+    
+    inpf = fopen(csv_out_path, "r");
+    assert(inpf != nullptr);
+    
+
+#endif
     
     //
     // Read the data
@@ -229,7 +373,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to read first line\n");
         exit(1);
     }
-    
+
     char *buf_p;
     {
         //
