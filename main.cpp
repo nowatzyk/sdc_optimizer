@@ -20,6 +20,76 @@ const char* csv_out_path = "/tmp/JoSim2csv_analyzer.csv";      // Output fifo fr
 const char* cir_inp_path = "/tmp/JoSim2csv_analyzer.cir";      // Input fifo to Josim
 
 const unsigned spice_src_max_char = 1024;   // Max line length in spice source file
+const char spice_escape = '~';              // Escape character in spice decks for pragma substitutions
+
+class pragma {
+    char        *name;
+    double      min_value, max_value;       // Range of values to step through
+    unsigned    n_steps;                    // #of n_steps
+    double      d_value;                    // Step size
+    
+    unsigned    step_cntr;                  // Step counter
+    pragma      *next;                      // List pointer
+    static pragma *root;                    // Anchor
+    
+    pragma(char *nm, double v_min, double v_max, unsigned n);   // private constructor
+public:
+    
+    static int  new_pragma(char *def);      // Creates a pragma
+    static pragma *find_pragma(char *nm);   // find pragma by its name (symbol)
+    double         get_cur_value() {return min_value + (double) step_cntr * d_value;};
+};
+
+pragma* pragma::root = nullptr;             // start of the list
+
+pragma::pragma(char* nm, double v_min, double v_max, unsigned n)
+// Constructor
+{
+    name = strdup(nm);
+    min_value = v_min;
+    max_value = v_max;
+    n_steps = n;
+    
+    next = root;
+    root = this;
+    
+    step_cntr = 0;
+    d_value = (v_max - v_min) / (double) n;
+}
+
+int pragma::new_pragma(char* def)
+//
+// Creates a new pragma
+//
+{
+    char buf[spice_src_max_char];
+    double v_min, v_max;
+    unsigned n;
+    
+    if (4 != sscanf(def, "%s%lf%lf%u", buf, &v_min, &v_max, &n))
+        return -1;                          // missing or wrong parameters
+    if ((v_min >= v_max) || (n < 1) || (strlen(buf) < 1))
+        return -2;                         // bad values
+    if (find_pragma(buf) != nullptr)
+        return -3;                          // already defined
+        
+    new pragma(buf, v_min, v_max, n);
+    return 0;
+}
+
+pragma * pragma::find_pragma(char* nm)
+{
+    pragma *pptr = root;
+    while (pptr != nullptr) {
+        if (!strcmp(nm, pptr->name))
+            return pptr;
+        pptr = pptr->next;
+    }
+    return nullptr;
+}
+
+
+
 
 class spice_deck {
    unsigned     n_lines;                    // #of lines
@@ -60,17 +130,22 @@ int spice_deck::read_cir_file(const char* fn)
         return -1;
     
     char buf[spice_src_max_char];
+    unsigned n_pragma = 1;              // Just to keep the lines numbers straight
     
     while(fgets(buf, spice_src_max_char - 1, inp)) {
 
         if (strlen(buf) > (spice_src_max_char - 2))  {
-            fprintf(stderr, "Line %u in %s is too long (increase spice_src_max_char)\n", n_lines + 1, fn);
+            fprintf(stderr, "Line %u in %s is too long (increase spice_src_max_char)\n", n_lines + n_pragma, fn);
             exit(1);
         }
-        
-        //
-        // Processing for parameter detection, etc. goes here
-        //
+
+        if (!strncmp(buf, "*Pragma", 7)) {
+            if (pragma::new_pragma(buf + 7)) {
+                fprintf(stderr, "Bad pragma def in line %u of %s\n", n_lines + n_pragma, fn);
+            }
+            n_pragma++;
+            continue;
+        }
         
         if (n_lines >= max_lines) {
             max_lines += max_lines / 2;         // Add 50%
@@ -93,11 +168,42 @@ int spice_deck::write_cir_file(const char* fn)
     if (out == nullptr)
         return -1;
     
+    char buf[2*spice_src_max_char];     // NOTE - bug lurking here:
+    // pragma substitutions can make the line longer and may cause an buffer overflow.
+    // Not likely because few substitution are made, but I'm too lazy right now to make this bullet proof.
+    
     for (unsigned i = 0; i < n_lines; i++) {
-        //
-        // Edit the source line into a buffer here...
-        //
-        if (0 > fputs(src[i], out)) {    // some problem
+        char *cs_ptr = src[i];
+        char *cd_ptr = buf;
+        while (*cs_ptr) {
+            if (*cs_ptr == spice_escape) {
+                cs_ptr++;
+                unsigned i = 0;
+                while (cs_ptr[i] != spice_escape) {
+                    if (cs_ptr[i] == 0) {
+                        fprintf(stderr, "Unmatched pragma references: ~some_name~ , trailing ~ missing in circuit file\n");
+                        exit(1);
+                    }
+                    cd_ptr[i] = cs_ptr[i];
+                    i++;
+                }
+                cd_ptr[i] = 0;
+                pragma *p_ptr = pragma::find_pragma(cd_ptr);
+                if (p_ptr == nullptr) {
+                    fprintf(stderr, "Undefined pragma reference in *.cir file: '%s'\n", cd_ptr);
+                    exit(1);
+                }
+                int n;
+                sprintf(cd_ptr, " %.9lg %n", p_ptr->get_cur_value(), &n);
+                
+                cs_ptr += i + 1;
+                cd_ptr += n;
+            } else
+                *cd_ptr++ = *cs_ptr++;
+        }
+        *cd_ptr = 0;
+        
+        if (0 > fputs(buf, out)) {    // some problem
             fclose(out);
             return -2;
         }
@@ -334,7 +440,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
         exit(1);
     }
-
+    
     pid_t child_pid = fork();
     if (child_pid == 0) {
         //
