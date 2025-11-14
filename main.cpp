@@ -23,6 +23,8 @@ const unsigned spice_src_max_char = 1024;   // Max line length in spice source f
 const char spice_escape = '~';              // Escape character in spice decks for pragma substitutions
 
 const unsigned n_slope_pks = 4;             // #of data points to be used in slope determination
+const unsigned pragma_name_lim = 64;        // Max symbol name length for pragmas
+const unsigned ts_name_lim =64;             // Dito for TS names
 
 struct units {
     char        c;                          // character representation
@@ -50,7 +52,7 @@ struct t_of_peaks {
 };
 
 class pragma {
-    char        *name;
+    char        name[pragma_name_lim];
     double      min_value, max_value;       // Range of values to step through
     unsigned    n_steps;                    // #of n_steps
     double      d_value;                    // Step size
@@ -60,7 +62,7 @@ class pragma {
     pragma      *next;                      // List pointer
     static pragma *root;                    // Anchor
     void         i_reset() {step_cntr = 0;};    // Duh!
-    int          i_next()  {if (++step_cntr >= n_steps) {n_steps = 0; return 1;}; return 0;};
+    int          i_next(); 
     void         print_name(FILE *fp);
     void         print_value(FILE *fp);
     
@@ -79,9 +81,21 @@ public:
 
 pragma* pragma::root = nullptr;             // start of the list
 
+int pragma::i_next()
+{
+    step_cntr++;
+    
+    if (step_cntr >= n_steps) {
+        step_cntr = 0;
+        return 1;
+    } 
+    
+    return 0;
+}
+
 void pragma::print_name(FILE* fp)
 {
-    if (unit > 0) fprintf(fp, " %s", name);
+    if (unit <= 0) fprintf(fp, " %s", name);
     else          fprintf(fp, " %s[%c]", name, unit_table[unit].c);
 }
 
@@ -126,6 +140,7 @@ int pragma::advance()
     while(p_ptr != nullptr) {
         if (p_ptr->i_next() == 0)
             return 0;
+        p_ptr = p_ptr->next;
     }
     
     return 1;
@@ -134,7 +149,11 @@ int pragma::advance()
 pragma::pragma(char* nm, double v_min, double v_max, unsigned n, unsigned u)
 // Constructor
 {
-    name = strdup(nm);
+    if (strlen(nm) > (pragma_name_lim - 2)) {
+        fprintf(stderr, "Pragma name must be less tha %u caracters long\n", pragma_name_lim - 1);
+        exit(1);
+    }
+    strncpy(name, nm, pragma_name_lim - 1);
     min_value = v_min;
     max_value = v_max;
     n_steps = n;
@@ -144,7 +163,8 @@ pragma::pragma(char* nm, double v_min, double v_max, unsigned n, unsigned u)
     root = this;
     
     step_cntr = 0;
-    d_value = (v_max - v_min) / (double) n;
+    if (n <= 1) d_value = 1.0;          // Does not matter, never used (only 1 step)
+    else        d_value = (v_max - v_min) / (double) (n - 1);
 }
 
 int pragma::new_pragma(char* def)
@@ -294,7 +314,7 @@ int spice_deck::write_cir_file(const char* fn)
                 }
                 int n;
                 sprintf(cd_ptr, " %.9lg %n", p_ptr->get_cur_value(), &n);
-                
+                printf(">>> %.6lg\n", p_ptr->get_cur_value());
                 cs_ptr += i + 1;
                 cd_ptr += n;
             } else
@@ -316,7 +336,7 @@ int spice_deck::write_cir_file(const char* fn)
 
 
 class time_series {
-    char    *name;          // Name of this coumn
+    char    name[ts_name_lim];          // Name of this column
     double  *data;
     unsigned    n_data;
     unsigned    max_data;
@@ -415,7 +435,11 @@ double time_series::peak_search(unsigned int from, unsigned int to, double thr, 
 
 time_series::time_series(const char* nm)
 {
-    name = strdup(nm);
+    if (strlen(nm) > (ts_name_lim - 2)) {
+        fprintf(stderr, "Time series names must mot exceed %u characters\n", ts_name_lim - 1);
+        exit(1);
+    }
+    strncpy(name, nm, ts_name_lim - 1);
 //    printf(">>%s<<\n", name); 
     max_data = 128;
     n_data = 0;
@@ -426,8 +450,11 @@ time_series::time_series(const char* nm)
 
 void time_series::reset(const char* nm)
 {
-    free(name);
-    name = strdup(nm);
+    if (strlen(nm) > (ts_name_lim - 2)) {
+        fprintf(stderr, "Time series names must mot exceed %u characters\n", ts_name_lim - 1);
+        exit(1);
+    }
+    strncpy(name, nm, ts_name_lim - 1);
     n_data = 0;
     v_min = __DBL_MAX__;
     v_max = - __DBL_MAX__;
@@ -562,6 +589,7 @@ int main(int argc, char *argv[])
     // Initialization and setup done.
     //
     for (unsigned n_sim = 0; 1; n_sim++) {
+        n_ts = 0;
         //
         // Do the actual work:
         //   1. Run JoSIM with the edited circuit file
@@ -669,7 +697,13 @@ int main(int argc, char *argv[])
             //
             if (top[i].t_pks != nullptr)
                 delete[] top[i].t_pks;
-            top[i].n_pks = locate_peaks(ts, n_ts, nodes_of_interest[i], top[i].t_pks);
+            top[i].t_pks = nullptr;
+            int j = locate_peaks(ts, n_ts, nodes_of_interest[i], top[i].t_pks);
+            if (j <= 0) {
+                // Failed to locate peaks:
+                min_n_pks = 0;
+                top[i].n_pks = 0;
+            }
             if (min_n_pks > top[i].n_pks)
                 min_n_pks = top[i].n_pks;
             if (max_n_pks < top[i].n_pks)
@@ -690,12 +724,15 @@ int main(int argc, char *argv[])
         fprintf(of, "\n");
     
         for(unsigned i = 0; i < min_n_pks; i++) {
-            fprintf(of, "%.9lg %.9lg %.9lg %.9lg %.9lg\n", 
+            fprintf(of, "%.9lg %.9lg %.9lg %.9lg %.9lg %.9lg %.9lg\n", 
                     (top[0].t_pks[i] - top[1].t_pks[i]) * 1.0e12,
                     (top[2].t_pks[i] - top[3].t_pks[i]) * 1.0e12,
                     (top[4].t_pks[i] - top[5].t_pks[i]) * 1.0e12,
                     (top[6].t_pks[i] - top[7].t_pks[i]) * 1.0e12,
-                    (top[8].t_pks[i] - top[9].t_pks[i]) * 1.0e12);
+                    (top[8].t_pks[i] - top[9].t_pks[i]) * 1.0e12,
+                    (top[8].t_pks[i] - top[0].t_pks[i]) * 1.0e12,
+                    (top[9].t_pks[i] - top[1].t_pks[i]) * 1.0e12
+            );
         }
    
         fclose(of);
