@@ -41,18 +41,21 @@ struct units {
     {0, 1.0}
 };
 
-const unsigned n_noi = 10;                  // #of nodes of interest
+const unsigned n_noi = 6;                  // #of nodes of interest
 const char *nodes_of_interest[n_noi] = {
-    "V(N5)", "V(N5A)", "V(N6)", "V(N6A)", "V(N7)", "V(N7A)", "V(N8)", "V(N8A)", "V(N9)", "V(N9A)"
+    "V(N5)", "V(N5A)", "V(N5B)", "V(N5C)", "V(N19)", "V(N19A)"
 };
 
 struct t_of_peaks {
-    unsigned    n_pks;                      // %of peaks
+    unsigned    n_pks;                      // #of peaks
     double      *t_pks;                     // Time of peaks
 };
 
 class pragma {
     char        name[pragma_name_lim];
+    char        type;                       // Nature of value selection:
+                                            //  0: step through from min to max in regular increments
+                                            //  1: Binary search for change
     double      min_value, max_value;       // Range of values to step through
     unsigned    n_steps;                    // #of n_steps
     double      d_value;                    // Step size
@@ -66,7 +69,7 @@ class pragma {
     void         print_name(FILE *fp);
     void         print_value(FILE *fp);
     
-    pragma(char *nm, double v_min, double v_max, unsigned n, unsigned u);   // private constructor
+    pragma(char *nm, double v_min, double v_max, unsigned n, unsigned u, char t = 0);   // private constructor
 public:
     
     static void reset();                    // Go back to initial state
@@ -101,7 +104,7 @@ void pragma::print_name(FILE* fp)
 
 void pragma::print_value(FILE* fp)
 {
-    fprintf(fp, " %.9lf", min_value + (double) step_cntr * d_value);
+    fprintf(fp, " %.15lg", min_value + (double) step_cntr * d_value);
 }
 
 void pragma::reset()
@@ -146,13 +149,17 @@ int pragma::advance()
     return 1;
 }
 
-pragma::pragma(char* nm, double v_min, double v_max, unsigned n, unsigned u)
+pragma::pragma(char* nm, double v_min, double v_max, unsigned n, unsigned u, char ty)
 // Constructor
 {
     if (strlen(nm) > (pragma_name_lim - 2)) {
         fprintf(stderr, "Pragma name must be less tha %u caracters long\n", pragma_name_lim - 1);
         exit(1);
     }
+    
+    assert((0 <= ty) && (ty <= 1));
+    type = ty;
+    
     strncpy(name, nm, pragma_name_lim - 1);
     min_value = v_min;
     max_value = v_max;
@@ -313,7 +320,7 @@ int spice_deck::write_cir_file(const char* fn)
                     exit(1);
                 }
                 int n;
-                sprintf(cd_ptr, " %.9lg %n", p_ptr->get_cur_value(), &n);
+                sprintf(cd_ptr, " %.15lg%n", p_ptr->get_cur_value(), &n);
                 printf(">>> %.6lg\n", p_ptr->get_cur_value());
                 cs_ptr += i + 1;
                 cd_ptr += n;
@@ -565,7 +572,7 @@ int main(int argc, char *argv[])
     }
     
     spice_deck sd;
-    if (!sd.read_cir_file(argv[1])) {
+    if (1 > sd.read_cir_file(argv[1])) {
         fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
         exit(1);
     }
@@ -583,8 +590,12 @@ int main(int argc, char *argv[])
     assert(sum_fp != nullptr);
     fprintf(sum_fp, "#");
     pragma::list_names(sum_fp);
-    fprintf(sum_fp, " slop(N5/N9) min_delay avg_delay max_delay A:min_delay A:avg_delay A:max_delay\n");
-
+//    fprintf(sum_fp, " slop(N5/N9) min_delay avg_delay max_delay A:min_delay A:avg_delay A:max_delay\n");
+    fprintf(sum_fp, " peak-times for");
+    for (unsigned i; i < n_noi; i++)
+        fprintf(sum_fp, " %s", nodes_of_interest[i]);
+    fprintf(sum_fp, "\n");
+  
     //
     // Initialization and setup done.
     //
@@ -698,22 +709,46 @@ int main(int argc, char *argv[])
             if (top[i].t_pks != nullptr)
                 delete[] top[i].t_pks;
             top[i].t_pks = nullptr;
+            top[i].n_pks = 0;
             int j = locate_peaks(ts, n_ts, nodes_of_interest[i], top[i].t_pks);
             if (j <= 0) {
                 // Failed to locate peaks:
                 min_n_pks = 0;
                 top[i].n_pks = 0;
+                continue;
             }
-            if (min_n_pks > top[i].n_pks)
-                min_n_pks = top[i].n_pks;
-            if (max_n_pks < top[i].n_pks)
-                max_n_pks = top[i].n_pks;
+            top[i].n_pks = j;
+            if (min_n_pks > j)
+                min_n_pks = j;
+            if (max_n_pks < j)
+                max_n_pks = j;
         }
         // Note: if the min/max #of peaks are not the same, the simulation is suspect!
         //       this usually happens when some pules do not traverse the jtl until the end
         //       or if the delay exceeds the period so that at the end of the simulation
         //       some peaks are beyond the simulation time limit.
+        
+        
+        for (unsigned i = 0; i < n_noi; i++) {
+            //
+            // Print the first peack > 50ps
+            //
+            unsigned pk_found = 0;
+            for (unsigned j = 0; j < top[i].n_pks; j++) {
+                double t = top[i].t_pks[j] * 1.0e12;
+                if (t > 50.0) {
+                    // peak is past 50ps (initialization phase)
+                    fprintf(sum_fp, " %.15lg", t);
+                    pk_found = 1;
+                    break;
+                }
+            }
+            
+            if (!pk_found) fprintf(sum_fp, " 0");
+        }
+        fprintf(sum_fp, "\n");
 
+/*
         sprintf(buf, "delay_%u.dat", n_sim);
         FILE *of = fopen(buf, "w");
         assert(of);
@@ -797,7 +832,8 @@ int main(int argc, char *argv[])
         fprintf(sum_fp, " %.9lg %.9lg %.9lg %.9lg %.9lg %.9lg %.9lg\n", slope,
                   min_dly * 1.0e12,   avg_dly * 1.0e12,   max_dly * 1.0e12,
                 A_min_dly * 1.0e12, A_avg_dly * 1.0e12, A_max_dly * 1.0e12);
-        
+*/
+
         
         if (pragma::advance())
             break;
