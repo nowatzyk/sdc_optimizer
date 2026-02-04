@@ -7,84 +7,76 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-const unsigned max_ln_length = 100000;      // We expect some very long lines...
-const unsigned max_ts = 128;                // Max number of time series
+extern "C" {
+#include "parser.h"                         // Bison generated headers (in build dir)
+#include "lex.yy.h"                         // Flex-generated header (in build dir)
+#include "parser_interf.h"                  // needed to integrate the parser
+}
 
-const double threshold_frac = 0.6;         // Peak search threshold, 75% of max 
-const double threshold_hyst = 0.01;         // Hysteresis to avoid noise induced false peak locations
+#include "csv_analyzer.h"
 
-const unsigned max_pks = 1024;              // needed to allocate arrays for peaks:
-                                            // Peaks are located first and then analyzed
-                                            
 const char* csv_out_path = "/tmp/JoSim2csv_analyzer.csv";      // Output fifo from Josim to this program
 const char* cir_inp_path = "/tmp/JoSim2csv_analyzer.cir";      // Input fifo to Josim
 
-const unsigned spice_src_max_char = 1024;   // Max line length in spice source file
-const char spice_escape = '~';              // Escape character in spice decks for pragma substitutions
 
-const unsigned n_slope_pks = 4;             // #of data points to be used in slope determination
-const unsigned pragma_name_lim = 64;        // Max symbol name length for pragmas
-const unsigned ts_name_lim =64;             // Dito for TS names
+////////////////////////////////////////////////////////////////////
+//
+// Static/gobal things:
+//
 
-struct units {
-    char        c;                          // character representation
-    double      val;                        // Value
-} unit_table[] = {
+nodes_of_interest* nodes_of_interest::root = nullptr; // Root of the NOI list
+unsigned nodes_of_interest::n_noi = 0;      // Counts the number of NOI's
+
+parameter* parameter::root = nullptr;       // start of the parameter list
+
+units unit_table[] = {
     {' ', 1.0},                             // Nothing: unity
+    {'G', 1.0e9},                           // Giga
+    {'M', 1.0e6},                           // Mega
+    {'K', 1.0e3},                           // Kilo
     {'m', 1.0e-3},                          // milli
     {'u', 1.0e-6},                          // micro
     {'n', 1.0e-9},                          // nano
-    {'p', 1.0e-9},                          // pico
+    {'p', 1.0e-12},                         // pico
     {'L', 125.0e-6},                        // Liks, unit of 125 micro-Ampere
     {'O', 2.632e-12},                       // oHenry
     {'T', 2.0 * M_PI},                      // Turns
     {0, 1.0}
 };
 
-const unsigned n_noi = 6;                  // #of nodes of interest
-const char *nodes_of_interest[n_noi] = {
-    "V(N5)", "V(N5A)", "V(N5B)", "V(N5C)", "V(N19)", "V(N19A)"
-};
+unsigned yy_n_parse_err = 0;                // Counts # of parse errors
 
-struct t_of_peaks {
-    unsigned    n_pks;                      // #of peaks
-    double      *t_pks;                     // Time of peaks
-};
+unsigned time_series::n_init = 1024;        // First allocation default
+time_series* time_series::root = nullptr;   // Root of the time series
 
-class pragma {
-    char        name[pragma_name_lim];
-    char        type;                       // Nature of value selection:
-                                            //  0: step through from min to max in regular increments
-                                            //  1: Binary search for change
-    double      min_value, max_value;       // Range of values to step through
-    unsigned    n_steps;                    // #of n_steps
-    double      d_value;                    // Step size
-    unsigned    unit;                       // Multiplyer to be applied to value before sending to JoSim
+spice_deck circuit;                         // circuit under test
     
-    unsigned    step_cntr;                  // Step counter
-    pragma      *next;                      // List pointer
-    static pragma *root;                    // Anchor
-    void         i_reset() {step_cntr = 0;};    // Duh!
-    int          i_next(); 
-    void         print_name(FILE *fp);
-    void         print_value(FILE *fp);
-    
-    pragma(char *nm, double v_min, double v_max, unsigned n, unsigned u, char t = 0);   // private constructor
-public:
-    
-    static void reset();                    // Go back to initial state
-    static int  advance();                  // Advance to next value combination, returns != 0 when exhausted
-    static void list_names(FILE *fp);       // adds names to file (preceeded by space, followed by nothing)
-    static void list_c_val(FILE *fp);       // list the current values, like above
-    
-    static int  new_pragma(char *def);      // Creates a pragma
-    static pragma *find_pragma(char *nm);   // find pragma by its name (symbol)
-    double      get_cur_value() {return (min_value + (double) step_cntr * d_value) * unit_table[unit].val;};
-};
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Class functions
+//
 
-pragma* pragma::root = nullptr;             // start of the list
+int nodes_of_interest::find(const char* name)
+// Finds the NOI by name or returns -1
+{
+    for (nodes_of_interest *noi_ptr = root; noi_ptr != nullptr; noi_ptr = noi_ptr->next)
+        if (!strcmp(name, noi_ptr->name))
+            return noi_ptr->va_index;
+    return -1;
+}
 
-int pragma::i_next()
+nodes_of_interest::nodes_of_interest(const char* name)
+// Constructor
+{
+    next = root;
+    root = this;
+    va_index = n_noi++;
+    name = strdup(name);                    // Yeah, I should not mix malloc() and new, but I don't care right now.
+}
+
+//////
+
+int parameter::i_next()
 {
     step_cntr++;
     
@@ -96,50 +88,49 @@ int pragma::i_next()
     return 0;
 }
 
-void pragma::print_name(FILE* fp)
+void parameter::print_name(FILE* fp)
 {
-    if (unit <= 0) fprintf(fp, " %s", name);
-    else          fprintf(fp, " %s[%c]", name, unit_table[unit].c);
+    fprintf(fp, " %s", name);
 }
 
-void pragma::print_value(FILE* fp)
+void parameter::print_value(FILE* fp)
 {
     fprintf(fp, " %.15lg", min_value + (double) step_cntr * d_value);
 }
 
-void pragma::reset()
+void parameter::reset()
 {
-    pragma *p_ptr = root;
+    parameter *p_ptr = root;
     while(p_ptr != nullptr) {
         p_ptr->i_reset();
         p_ptr = p_ptr->next;
     }
 }
 
-void pragma::list_names(FILE* fp)
+void parameter::list_names(FILE* fp)
 {
-    pragma *p_ptr = root;
+    parameter *p_ptr = root;
     while(p_ptr != nullptr) {
         p_ptr->print_name(fp);
         p_ptr = p_ptr->next;
     }
 }
 
-void pragma::list_c_val(FILE* fp)
+void parameter::list_c_val(FILE* fp)
 {
-    pragma *p_ptr = root;
+    parameter *p_ptr = root;
     while(p_ptr != nullptr) {
         p_ptr->print_value(fp);
         p_ptr = p_ptr->next;
     }
 }
 
-int pragma::advance()
+int parameter::advance()
 //
-// Advance the pragma values. Returns 1 when all combinations are done, 0 otherwise
+// Advance the parameter values. Returns 1 when all combinations are done, 0 otherwise
 //
 {
-    pragma *p_ptr = root;
+    parameter *p_ptr = root;
     while(p_ptr != nullptr) {
         if (p_ptr->i_next() == 0)
             return 0;
@@ -149,22 +140,15 @@ int pragma::advance()
     return 1;
 }
 
-pragma::pragma(char* nm, double v_min, double v_max, unsigned n, unsigned u, char ty)
-// Constructor
-{
-    if (strlen(nm) > (pragma_name_lim - 2)) {
-        fprintf(stderr, "Pragma name must be less tha %u caracters long\n", pragma_name_lim - 1);
-        exit(1);
-    }
+parameter::parameter(char* nm, double v_min, double v_max, unsigned n)
+// Constructor for a scan-type parameter
+{ 
+    type = scan;            //This is a scan type parameter
     
-    assert((0 <= ty) && (ty <= 1));
-    type = ty;
-    
-    strncpy(name, nm, pragma_name_lim - 1);
+    name = nm;
     min_value = v_min;
     max_value = v_max;
     n_steps = n;
-    unit = u;
     
     next = root;
     root = this;
@@ -174,38 +158,11 @@ pragma::pragma(char* nm, double v_min, double v_max, unsigned n, unsigned u, cha
     else        d_value = (v_max - v_min) / (double) (n - 1);
 }
 
-int pragma::new_pragma(char* def)
-//
-// Creates a new pragma
-//
-{
-    char buf[spice_src_max_char];
-    double v_min, v_max;
-    unsigned n;
-    
-    char u1, u2;
-    unsigned unit;
-    if (6 != sscanf(def, "%s%lf%c%lf%c%u", buf, &v_min, &u1, &v_max, &u2, &n))
-        return -1;                          // missing or wrong parameters
-    if (u1 != u2)
-        return -2;                          // Units must be the same 
-    for (unit = 0; unit_table[unit].c != 0; unit++)
-        if (unit_table[unit].c == u1)
-            break;
-    if (unit_table[unit].c == 0)
-        return -3;                          // Undefined unit character
-    if ((v_min >= v_max) || (n < 1) || (strlen(buf) < 1))
-        return -4;                         // bad values
-    if (find_pragma(buf) != nullptr)
-        return -5;                          // already defined
-        
-    new pragma(buf, v_min, v_max, n, unit);
-    return 0;
-}
 
-pragma * pragma::find_pragma(char* nm)
+
+parameter * parameter::find_parameter(const char* nm)
 {
-    pragma *pptr = root;
+    parameter *pptr = root;
     while (pptr != nullptr) {
         if (!strcmp(nm, pptr->name))
             return pptr;
@@ -214,29 +171,91 @@ pragma * pragma::find_pragma(char* nm)
     return nullptr;
 }
 
+/////////
+
+spice_elements::spice_elements(char* line)
+{
+    se_type = text;
+    next = nullptr;
+    txt.text = line;
+}
+
+spice_elements::spice_elements(class parameter* par_ptr)
+{
+    se_type = parameter;
+    next = nullptr;
+    par.param = par_ptr;
+}
+
+spice_elements::spice_elements()
+{
+    se_type = new_line;
+    next = nullptr;
+}
+
+void spice_elements::print(FILE* of)
+{
+    switch(se_type) {
+        case text:
+            fputs(txt.text, of);
+            break;
+            
+        case parameter:
+            fprintf(of, "%.12lg", par.param->get_cur_value());
+            break;
+            
+        case new_line:
+            fputc('\n', of);
+            break;
+        
+        default: assert(0);
+    }
+}
 
 
-
-class spice_deck {
-   unsigned     n_lines;                    // #of lines
-   unsigned     max_lines;                  // just for allocation purposes
-   char         **src;                      // The source file
-
-public:
-    spice_deck();                           // constructor
-    
-    int read_cir_file(const char *fn);      // Reads a spice deck from a file into memory
-    int write_cir_file(const char *fn);     // writes the spice deck to a file
-};
+/////////
 
 spice_deck::spice_deck()
 //
 // Constructor
 //
 {
-    n_lines = 0;
-    max_lines = 1024;
-    src = (char **) malloc(sizeof(char *) * max_lines);
+    first = nullptr;
+    last = nullptr;
+}
+
+void spice_deck::add_line(char* txt)
+{
+    spice_elements *sep = new spice_elements(txt);
+    if (first == nullptr)
+        first = sep;
+    else
+        last->add_next(sep);
+    last = sep;
+}
+
+void spice_deck::add_param_ref(parameter *par)
+// adds a parameter reference
+{
+    spice_elements *sep = new spice_elements(par);
+    if (first == nullptr)
+        first = sep;
+    else
+        last->add_next(sep);
+    last = sep;
+}
+
+void spice_deck::add_nl()
+{
+    if ((last != nullptr) && (last->is_nl() == 1))
+        return;             // Ignore multiple new-lines
+    
+    spice_elements *sep = new spice_elements();
+    if (first == nullptr)
+        first = sep;
+    else
+        last->add_next(sep);
+    last = sep;
 }
 
 int spice_deck::read_cir_file(const char* fn)
@@ -251,38 +270,18 @@ int spice_deck::read_cir_file(const char* fn)
 //     -1 : failed to open the file
 //
 {
-    FILE *inp = fopen(fn, "r");
-    if (inp == nullptr)
+    yyin = fopen(fn, "r");
+    if (yyin == nullptr)
         return -1;
     
-    char buf[spice_src_max_char];
-    unsigned n_pragma = 1;              // Just to keep the lines numbers straight
-    
-    while(fgets(buf, spice_src_max_char - 1, inp)) {
-
-        if (strlen(buf) > (spice_src_max_char - 2))  {
-            fprintf(stderr, "Line %u in %s is too long (increase spice_src_max_char)\n", n_lines + n_pragma, fn);
-            exit(1);
-        }
-
-        if (!strncmp(buf, "*Pragma", 7)) {
-            if (pragma::new_pragma(buf + 7)) {
-                fprintf(stderr, "Bad pragma def in line %u of %s\n", n_lines + n_pragma, fn);
-            }
-            n_pragma++;
-            continue;
-        }
-        
-        if (n_lines >= max_lines) {
-            max_lines += max_lines / 2;         // Add 50%
-            src = (char **) realloc(src, sizeof(char *) * max_lines);
-        }
-        src[n_lines++] = strdup(buf);
+    if ((yyparse() != 0) || (yy_n_parse_err > 0)) {
+        fprintf(stderr, "Parsing of the spice circuit input failed.\n");
+        exit(1);
     }
     
-    fclose(inp);
+    fclose(yyin);
     
-    return n_lines;
+    return yylineno;
 }
 
 int spice_deck::write_cir_file(const char* fn)
@@ -294,75 +293,15 @@ int spice_deck::write_cir_file(const char* fn)
     if (out == nullptr)
         return -1;
     
-    char buf[2*spice_src_max_char];     // NOTE - bug lurking here:
-    // pragma substitutions can make the line longer and may cause an buffer overflow.
-    // Not likely because few substitution are made, but I'm too lazy right now to make this bullet proof.
-    
-    for (unsigned i = 0; i < n_lines; i++) {
-        char *cs_ptr = src[i];
-        char *cd_ptr = buf;
-        while (*cs_ptr) {
-            if (*cs_ptr == spice_escape) {
-                cs_ptr++;
-                unsigned i = 0;
-                while (cs_ptr[i] != spice_escape) {
-                    if (cs_ptr[i] == 0) {
-                        fprintf(stderr, "Unmatched pragma references: ~some_name~ , trailing ~ missing in circuit file\n");
-                        exit(1);
-                    }
-                    cd_ptr[i] = cs_ptr[i];
-                    i++;
-                }
-                cd_ptr[i] = 0;
-                pragma *p_ptr = pragma::find_pragma(cd_ptr);
-                if (p_ptr == nullptr) {
-                    fprintf(stderr, "Undefined pragma reference in *.cir file: '%s'\n", cd_ptr);
-                    exit(1);
-                }
-                int n;
-                sprintf(cd_ptr, " %.15lg%n", p_ptr->get_cur_value(), &n);
-                printf(">>> %.6lg\n", p_ptr->get_cur_value());
-                cs_ptr += i + 1;
-                cd_ptr += n;
-            } else
-                *cd_ptr++ = *cs_ptr++;
-        }
-        *cd_ptr = 0;
-        
-        if (0 > fputs(buf, out)) {    // some problem
-            fclose(out);
-            return -2;
-        }
-    }
+    for(spice_elements *spe_ptr = first; spe_ptr != nullptr; spe_ptr = spe_ptr->get_next())
+        spe_ptr->print(out);
     
     fclose(out);
     return 0;
 }
 
 
-
-
-class time_series {
-    char    name[ts_name_lim];          // Name of this column
-    double  *data;
-    unsigned    n_data;
-    unsigned    max_data;
-    double      v_min, v_max;
-public:
-    time_series(const char *name);
-    ~time_series();
-    
-    void        reset(const char *nm);          // Reset the time series and give it a new (same) name
-    void add_datum(double);
-    double get_max() {return v_max;};
-    double get_min() {return v_min;};
-    char *get_name() {return name;};
-    double get_val(unsigned i) {assert(i < n_data); return data[i];};
-    
-    unsigned get_n() {return n_data;};
-    
-    double peak_search(unsigned from, unsigned to, double thr, double eps, unsigned &end);
-};
+////////////
 
 double time_series::peak_search(unsigned int from, unsigned int to, double thr, double eps, unsigned &end)
 //
@@ -440,28 +379,22 @@ double time_series::peak_search(unsigned int from, unsigned int to, double thr, 
 }
 
 
-time_series::time_series(const char* nm)
+time_series::time_series(char* nm)
 {
-    if (strlen(nm) > (ts_name_lim - 2)) {
-        fprintf(stderr, "Time series names must mot exceed %u characters\n", ts_name_lim - 1);
-        exit(1);
-    }
-    strncpy(name, nm, ts_name_lim - 1);
-//    printf(">>%s<<\n", name); 
-    max_data = 128;
-    n_data = 0;
-    v_min = __DBL_MAX__;
-    v_max = - __DBL_MAX__;
+    name = nm;
+    max_data = n_init;
     data = (double *) malloc(sizeof(double) * max_data);
+    reset();
 }
 
-void time_series::reset(const char* nm)
+void time_series::set_default_length(unsigned int n)
 {
-    if (strlen(nm) > (ts_name_lim - 2)) {
-        fprintf(stderr, "Time series names must mot exceed %u characters\n", ts_name_lim - 1);
-        exit(1);
-    }
-    strncpy(name, nm, ts_name_lim - 1);
+    assert(n > 0);
+    n_init = n;
+}
+
+void time_series::reset()
+{
     n_data = 0;
     v_min = __DBL_MAX__;
     v_max = - __DBL_MAX__;
@@ -553,6 +486,78 @@ int locate_peaks(time_series *ts[], unsigned n_ts, const char *nm, double* &pka)
     return i;
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Parser interface functions
+//
+
+void define_tran(double t_incr, double t_stop, double t_start, double dT_max)
+//
+// This is intercepted only to get a conservative estimate on the #of output line to
+// allocate the storage for the time series.
+// Note: the parser does not cover all flavors of the .tran statement, just what I need right now
+//
+{
+    char buf[128];                  // just a sufficiently large buffer
+    sprintf(buf, ".tran %.12lg  %.12lg %.12lg %.12lg\n", t_incr, t_stop, t_start, dT_max);
+    add_line_to_spice_deck(strdup(buf));    // Just add the original statement
+    
+    unsigned n = ceil(t_stop / t_incr);
+    if (n < 100)
+        fprintf(stderr, "Warning: the .tran statement in the spice deck produces less than 100 rows of output\n");
+    
+    time_series::set_default_length(n + 16); // adds a little slack
+}
+
+void add_line_to_spice_deck(char *string)
+// Just a wraper to add a text line to the spice void add_line_to_spice_deck(char* string)
+{
+    assert(string != nullptr);
+    circuit.add_line(string);
+}
+
+void add_subst_to_spice_deck(char *p_name)
+// Add a parameter reference
+{
+    parameter *p_ptr = parameter::find_parameter(p_name);
+    if (p_ptr == nullptr) {
+        fprintf(stderr, "Line %d: reference to undefined parameter '%s'\n", yylineno, p_name);
+        yy_n_parse_err++;
+    } else
+        circuit.add_param_ref(p_ptr);
+    
+    free(p_name);                   // This was allocated via strdup() in the lexer and is no longer needed
+                                    // Yeah, this isn't good practice, so sue me
+}
+
+void define_param_scan(char *name, double v_start, double v_stop, double n_steps)
+// Defines a parameter scan
+{
+    if (nullptr != parameter::find_parameter(name)) {
+        fprintf(stderr, "Line %d; Duplicate parameter definition for '%s'\n", yylineno, name);
+        yy_n_parse_err += 1;
+        return;
+    };
+    
+    unsigned n = nearbyint(n_steps);
+    new parameter(name, v_start, v_stop, n);
+}
+
+void define_monitor(char *name)
+{
+    new time_series(name);
+}
+
+void add_new_line_to_spice_deck()
+{
+    circuit.add_nl();
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// The main program
+//
+
 int main(int argc, char *argv[])
 {
     // Create the named pipes (FIFO) (unless already present)
@@ -571,17 +576,19 @@ int main(int argc, char *argv[])
         exit(1);
     }
     
-    spice_deck sd;
-    if (1 > sd.read_cir_file(argv[1])) {
+    if (1 > circuit.read_cir_file(argv[1])) {
         fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
         exit(1);
     }
     
+    circuit.write_cir_file("q.txt");
+    
+/*
     char *buf = new char[max_ln_length];
     time_series *ts[max_ts];
     for (unsigned i = 0; i < max_ts; i++) ts[i] = nullptr;
     unsigned n_ts = 0;
-    
+
     t_of_peaks top[n_noi];
     for (int i = 0; i < n_noi; i++)
         top[i].t_pks = nullptr;
@@ -589,13 +596,13 @@ int main(int argc, char *argv[])
     FILE *sum_fp = fopen("Summary.dat", "w");
     assert(sum_fp != nullptr);
     fprintf(sum_fp, "#");
-    pragma::list_names(sum_fp);
+    parameter::list_names(sum_fp);
 //    fprintf(sum_fp, " slop(N5/N9) min_delay avg_delay max_delay A:min_delay A:avg_delay A:max_delay\n");
     fprintf(sum_fp, " peak-times for");
     for (unsigned i; i < n_noi; i++)
         fprintf(sum_fp, " %s", nodes_of_interest[i]);
     fprintf(sum_fp, "\n");
-  
+
     //
     // Initialization and setup done.
     //
@@ -606,7 +613,7 @@ int main(int argc, char *argv[])
         //   1. Run JoSIM with the edited circuit file
         //   2. Digest the JoSim output
         //   3. Analyze the result
-        //   4. Repeat with different pragma values
+        //   4. Repeat with different parameter values
         //
         
         ///////////////////////////////////////////////////////////////////////////////////////////
@@ -747,15 +754,15 @@ int main(int argc, char *argv[])
             if (!pk_found) fprintf(sum_fp, " 0");
         }
         fprintf(sum_fp, "\n");
-
+*/
 /*
         sprintf(buf, "delay_%u.dat", n_sim);
         FILE *of = fopen(buf, "w");
         assert(of);
         fprintf(of, "#");
-        pragma::list_names(of);
+        parameter::list_names(of);
         fprintf(of, "\n#");
-        pragma::list_c_val(of);
+        parameter::list_c_val(of);
         fprintf(of, "\n");
     
         for(unsigned i = 0; i < min_n_pks; i++) {
@@ -828,18 +835,18 @@ int main(int argc, char *argv[])
         avg_dly   =   avg_dly / (double) min_n_pks;
         A_avg_dly = A_avg_dly / (double) min_n_pks;
         
-        pragma::list_c_val(sum_fp);
+        parameter::list_c_val(sum_fp);
         fprintf(sum_fp, " %.9lg %.9lg %.9lg %.9lg %.9lg %.9lg %.9lg\n", slope,
                   min_dly * 1.0e12,   avg_dly * 1.0e12,   max_dly * 1.0e12,
                 A_min_dly * 1.0e12, A_avg_dly * 1.0e12, A_max_dly * 1.0e12);
 */
-
+/*
         
-        if (pragma::advance())
+        if (parameter::advance())
             break;
     }
     
     fclose(sum_fp);
-
+*/
     exit(0);
 }

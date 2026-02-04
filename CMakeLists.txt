@@ -1,7 +1,31 @@
 cmake_minimum_required(VERSION 3.0)
+project(csv_analyzer LANGUAGES C CXX)
 
-project(csv_analyzer)
+find_package(FLEX REQUIRED)
+find_package(BISON REQUIRED)
 
-add_executable(csv_analyzer main.cpp)
+BISON_TARGET(
+    pragma_parser
+    parser.y
+    ${CMAKE_CURRENT_BINARY_DIR}/parser.c
+    DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/parser.h
+)
+
+FLEX_TARGET(
+    pragma_lexer
+    lexer.l
+    ${CMAKE_CURRENT_BINARY_DIR}/lexer.c
+    COMPILE_FLAGS "--header-file=${CMAKE_CURRENT_BINARY_DIR}/lex.yy.h"
+)
+
+ADD_FLEX_BISON_DEPENDENCY(pragma_lexer pragma_parser)
+
+add_executable(csv_analyzer
+    main.cpp
+    ${BISON_pragma_parser_OUTPUTS}
+    ${FLEX_pragma_lexer_OUTPUTS}
+)
+
+target_include_directories(csv_analyzer PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 install(TARGETS csv_analyzer RUNTIME DESTINATION bin)
