@@ -19,7 +19,7 @@
 
 <*>\n                { BEGIN(INITIAL); return EOL; }
 
-<IN_PRAGMA>[-0-9.eE]+[GMKmunpLOT]? { double val;
+<IN_PRAGMA>[-]?[0-9.eE]+[GMKmunpLOT]? { double val;
                         if (1 != sscanf(yytext, "%lf", &val)) {
                             fprintf(stderr, "Bad number in circuit file on line %i\n", yylineno);
                             val = NAN;
@@ -43,6 +43,15 @@
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     
 <IN_PRAGMA>[a-zA-Z][a-zA-Z0-9_|]+ { yylval.text = strdup(yytext); return SYMBOL; }
+
+<IN_PRAGMA>"="      { return ASSIGN; }
+<IN_PRAGMA>"+"      { return PLUS; }
+<IN_PRAGMA>"-"      { return MINUS; }
+<IN_PRAGMA>"("      { return OPAR; }
+<IN_PRAGMA>")"      { return CPAR; }
+<IN_PRAGMA>"*"      { return MULT; }
+<IN_PRAGMA>"/"      { return DIVIDE; }
+<IN_PRAGMA>","      { return COMMA; }
 
 <IN_PRAGMA>.        { fprintf(stderr, "Line %d: Unrecognized pragma character in *.cir file: '%s'\n", yylineno, yytext); } 
 

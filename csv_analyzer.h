@@ -4,7 +4,7 @@
 #pragma once
 
 const unsigned max_ln_length = 100000;      // We expect some very long lines...
-const unsigned max_ts = 128;                // Max number of time series
+const unsigned max_ts = 256;                // Max number of time series
 
 const double threshold_frac = 0.6;          // Peak search threshold, 75% of max 
 const double threshold_hyst = 0.01;         // Hysteresis to avoid noise induced false peak locations
@@ -16,21 +16,30 @@ const unsigned parameter_name_lim = 64;     // Max symbol name length for parame
 const unsigned spice_src_max_char = 1024;   // Max line length in spice source file
 const char spice_escape = '~';              // Escape character in spice decks for parameter substitutions
 
-const unsigned n_slope_pks = 4;             // #of data points to be used in slope determination
-
-const unsigned ts_name_lim =64;             // Dito for TS names
+const double edge_search_min_chg = 0.6667;  // For an edge search on a phase, this is the min change required
+                                            // to be considered an edge (in fractions of a turn, = 2PI phase)
+const double edge_search_t_win = 2.0e-12;   // max edge transition time 2 pico-seconds 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Spice deck parser stuff
 //
 
-
-
 struct t_of_peaks {
     unsigned    n_pks;                      // #of peaks
     double      *t_pks;                     // Time of peaks
 };
+
+struct f1_table {                           // Function pointer f1_table
+    const char  *name;                      // Name of this function (or nullptr)
+    double      (*func1_ptr) (double x);    // Pointer to the funcion
+};
+
+struct f2_table {                           // Function pointer f2_table
+    const char  *name;                      // Name of this function (or nullptr)
+    double      (*func2_ptr) (class nodes_of_interest *noi_ptr, double x);    // Pointer to the funcion
+};
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // 
@@ -42,17 +51,68 @@ class nodes_of_interest {
     nodes_of_interest *next;                // Pointer to the next list element
     static unsigned n_noi;                  // #of nodes of interest
     
-    char        *name;                      // Name of this NOI
-    unsigned    va_index;                   // Index into value array
+    const char  *name;                      // Name of this NOI
+    int         col_index;                  // Which column of the Josim output (or -1)
+
 public:
-    static int  find(const char *name);     // Find the named NOI and return its VA
-    nodes_of_interest(const char *name);    //create a new node of interest (Note: doesn't check for duplicate names: you need to do that before creaing a new NOI!)
+    static nodes_of_interest *find(const char *name);     // Find the named NOI and return its VA
+    nodes_of_interest(const char *name);    // create a new node of interest
+                                            // Note: doesn't check for duplicate names:
+                                            // you need to do that before creaing a new NOI!)
+    
     static unsigned get_n_noi() {return n_noi;}; // Just returns the current number of NOI's
+    int         get_col_index() {return col_index;};
+    unsigned    set_col_index(unsigned n);  // Set the column index, return != 0 if there is a problem
+    const char *get_name() {return name;};
+    static nodes_of_interest *find_undef(); // Returns point to the first NOI with col_index < 0
+};
+
+// Some related function definitione:
+double locate_peak(nodes_of_interest *noi_ptr, double x);
+double locate_rise(nodes_of_interest *noi_ptr, double x);
+double locate_fall(nodes_of_interest *noi_ptr, double x);
+double locate_edge(nodes_of_interest *noi_ptr, double x);
+
+class parameter;                            // Forward declaration so that it can be used in the expression class
+    
+enum    exp_type {                          // Type of expression
+                constant, 
+                function1,                  // Function with 1 argument
+                function2,                  // function with 2 arguments
+                p_reference,
+                addition,
+                subtraction,
+                multiplication,
+                division
+                };
+
+class expression {
+            
+    exp_type    type;                       // Type of this expression element
+            
+    expression  *l_arg, *r_arg;             // Pointers to the left/right arguments
+    double      value;                      // the value (if this is a constant
+    double      (*func1_ptr)(double x);     // Function1 pointer
+    double      (*func2_ptr)(class nodes_of_interest *noi_ptr, double x);     // Function2 pointer
+    parameter   *p_ptr;                     // Parameter pointer
+    nodes_of_interest *noi_ptr;             // NOI pointer
+    // Note: TBD save some space and make this a union
+    
+public:
+    expression  (double x);                 // creates a constant expression
+    expression  (double (*f_ptr)(double x), expression *arg_ptr);   // creates a function expression with 1 arg 
+    expression  (double (*f_ptr)(class nodes_of_interest *noi_ptr, double x), 
+                 class nodes_of_interest *noi_ptr,
+                 expression *arg_ptr);
+    expression  (expression *la_ptr, exp_type et, expression *ra_ptr); // creates a prmitive op
+    expression  (parameter *p_ptr);         // Creates a parameter reference
+    
+    double      get_value();                // Returns the current value of this expression
 };
 
 class parameter {
     char        *name;
-    enum {scan, expression, bin_search, sim_anneal} type;   // Parameter type
+    enum {scan, assignment, bin_search, sim_anneal} type;   // Parameter type
                                             
     //
     // Variables used by the scan function:
@@ -61,6 +121,11 @@ class parameter {
     unsigned    n_steps;                    // #of n_steps
     double      d_value;                    // Step size
     unsigned    step_cntr;                  // Step counter
+    
+    //
+    // assignment type parameter
+    //
+    expression  *expr;                      // Pointer to expression
     
     parameter      *next;                   // List pointer
     static parameter *root;                 // Anchor
@@ -73,6 +138,7 @@ class parameter {
     
 public:
     parameter(char *nm, double v_min, double v_max, unsigned );   // Creates a scan-type parameter
+    parameter(char *nm, class expression *expr); // creates an assignment type parameter
     
     static void reset();                    // Go back to initial state
     static int  advance();                  // Advance to next value combination, returns != 0 when exhausted
@@ -80,7 +146,7 @@ public:
     static void list_c_val(FILE *fp);       // list the current values, like above
 
     static parameter *find_parameter(const char *nm);   // find parameter by its name (symbol)
-    double      get_cur_value() {return (min_value + (double) step_cntr * d_value);};
+    double      get_cur_value();
 };
 
 struct spe_text {                           // Spice element: Text
@@ -126,7 +192,6 @@ public:
 };
 
 class time_series {
-    char        *name;                      // Name of this column
     double      *data;
     unsigned    n_data;
     unsigned    max_data;
@@ -138,19 +203,20 @@ class time_series {
     time_series *next;
     
 public:
-    time_series(char *name);
+    time_series();
     ~time_series();
     
     void        reset();                    // Reset the time series
     void        add_datum(double);
     double      get_max() {return v_max;};
     double      get_min() {return v_min;};
-    char        *get_name() {return name;};
     double      get_val(unsigned i) {assert(i < n_data); return data[i];};
     
     unsigned    get_n() {return n_data;};
     
     double      peak_search(unsigned from, unsigned to, double thr, double eps, unsigned &end);
+    double      edge_search(unsigned from, unsigned to, double min_chg, double t_window,
+                            unsigned &e_type, unsigned &end);
     
     static void set_default_length(unsigned n);  // Just set a default length
 };

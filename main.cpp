@@ -11,6 +11,8 @@ extern "C" {
 #include "parser.h"                         // Bison generated headers (in build dir)
 #include "lex.yy.h"                         // Flex-generated header (in build dir)
 #include "parser_interf.h"                  // needed to integrate the parser
+#include "lsq_fit.h"
+#include "fit_functions.h"
 }
 
 #include "csv_analyzer.h"
@@ -50,31 +52,194 @@ unsigned time_series::n_init = 1024;        // First allocation default
 time_series* time_series::root = nullptr;   // Root of the time series
 
 spice_deck circuit;                         // circuit under test
+
+f1_table func1_tab[] = {                    // Table of functions with one argument
+    {"sqrt", sqrt},                         // Square root
+    {"abs", fabs},                          // Absolute
+    {"ln", log},                            // Natural log
+    {"exp", exp},                           // e^x
+    {nullptr, nullptr}
+};
+
+f2_table func2_tab[] = {                    // Functions with 2 arguments
+    {"peak", locate_peak},
+    {"t_rise", locate_rise},
+    {"t_fall", locate_fall},
+    {"t_edge", locate_edge},
+    {nullptr, nullptr}
+};
     
+time_series *josim_out_columns[max_ts] = {nullptr}; // Storage for Josim output
+unsigned n_josim_out_columns = 0;           // #of these columns that are in use
+unsigned n_josim_runs = 0;                  // # of josim runs executed
+                                            // Note: the first one is used to set up things
+                                            
+double sim_time_start = -__DBL_MAX__;       // Simulation time start (in Seconds)
+double sim_time_incr = 0.0;                 // Simulation time increment
+                                            
+char josim_output_buf[max_ln_length];       // Where to put the output from Josim (large, thus not put on heap)
+
+double sim_time(double n)
+// Returns the simulation time for the n-th row
+// Note: row numbers may be fractional
+{
+    return sim_time_start + sim_time_incr * n;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Class functions
 //
 
-int nodes_of_interest::find(const char* name)
-// Finds the NOI by name or returns -1
+nodes_of_interest *nodes_of_interest::find(const char* name)
+// Finds the NOI by name or return nullptr
 {
     for (nodes_of_interest *noi_ptr = root; noi_ptr != nullptr; noi_ptr = noi_ptr->next)
         if (!strcmp(name, noi_ptr->name))
-            return noi_ptr->va_index;
-    return -1;
+            return noi_ptr;
+    return nullptr;
 }
 
-nodes_of_interest::nodes_of_interest(const char* name)
+nodes_of_interest::nodes_of_interest(const char* nm)
 // Constructor
 {
     next = root;
     root = this;
-    va_index = n_noi++;
-    name = strdup(name);                    // Yeah, I should not mix malloc() and new, but I don't care right now.
+    col_index = -1;
+    name = nm;                              // was allocated via strdup in the lexer
+    n_noi++;
+}
+
+unsigned nodes_of_interest::set_col_index(unsigned ind)
+{
+    if ((col_index < 0) || (col_index == ind)) {
+        col_index = ind;
+        return 0;
+    }
+    return 1;
+}
+
+nodes_of_interest *nodes_of_interest::find_undef()
+{
+    for (nodes_of_interest *n_ptr = root; n_ptr != nullptr; n_ptr = n_ptr->next)
+        if (n_ptr->col_index < 0)
+            return n_ptr;
+    return nullptr;
 }
 
 //////
+
+expression::expression(double x)
+{
+    type = constant;
+    value = x;
+    l_arg = nullptr;
+    r_arg = nullptr;
+    func1_ptr = nullptr;
+    p_ptr = nullptr;
+    func2_ptr = nullptr;
+    noi_ptr = nullptr;
+}
+
+expression::expression(double (*f_ptr) (double), expression* arg_ptr)
+{
+    type = function1;
+    value = 0.0;
+    l_arg = arg_ptr;
+    r_arg = nullptr;
+    func1_ptr = f_ptr;
+    p_ptr = nullptr;
+    func2_ptr = nullptr;
+    noi_ptr = nullptr;
+}
+
+expression::expression(expression* la_ptr, exp_type et, expression* ra_ptr)
+{
+    assert((et == addition) || (et == subtraction) || (et == multiplication) || (et == division));
+    type = et;
+    value = 0.0;
+    l_arg = la_ptr;
+    r_arg = ra_ptr;
+    func1_ptr = nullptr;    
+    p_ptr = nullptr;
+    func2_ptr = nullptr;
+    noi_ptr = nullptr;
+}
+
+expression::expression(parameter* param_ptr)
+{
+    type = p_reference;
+    value = 0.0;
+    l_arg = nullptr;
+    r_arg = nullptr;
+    func1_ptr = nullptr;
+    p_ptr = param_ptr;
+    func2_ptr = nullptr;
+    noi_ptr = nullptr;
+}
+
+expression::expression(double (*f_ptr) (class nodes_of_interest *n_ptr, double x),
+                       class nodes_of_interest* n_ptr, expression* arg_ptr)
+{
+    type = function2;
+    value = 0.0;
+    l_arg = arg_ptr;
+    r_arg = nullptr;
+    func1_ptr = nullptr;
+    p_ptr = nullptr;
+    func2_ptr = f_ptr;
+    noi_ptr = n_ptr;
+}
+
+
+double expression::get_value()
+{
+    switch (type) {
+        case constant:
+            return value;
+            
+        case function1:
+            return func1_ptr(l_arg->get_value());
+            
+        case function2:
+            return func2_ptr(noi_ptr, l_arg->get_value());
+            
+        case p_reference:
+            return p_ptr->get_cur_value();
+            
+        case addition:
+            return l_arg->get_value() + r_arg->get_value();
+            
+        case subtraction:
+            return l_arg->get_value() - r_arg->get_value();
+             
+        case multiplication:
+            return l_arg->get_value() * r_arg->get_value();
+            
+        case division:
+            return l_arg->get_value() / r_arg->get_value();
+            
+        default: assert(0);
+    }
+}
+
+
+//////
+
+double parameter::get_cur_value()
+{
+    switch (type) {
+        case scan:
+            return (min_value + (double) step_cntr * d_value);
+            
+        case assignment:
+            return expr->get_value();
+            
+        default:
+            assert (0);
+    }
+}
+
 
 int parameter::i_next()
 {
@@ -95,7 +260,7 @@ void parameter::print_name(FILE* fp)
 
 void parameter::print_value(FILE* fp)
 {
-    fprintf(fp, " %.15lg", min_value + (double) step_cntr * d_value);
+    fprintf(fp, " %.15lg", get_cur_value());
 }
 
 void parameter::reset()
@@ -130,11 +295,11 @@ int parameter::advance()
 // Advance the parameter values. Returns 1 when all combinations are done, 0 otherwise
 //
 {
-    parameter *p_ptr = root;
-    while(p_ptr != nullptr) {
+    for (parameter *p_ptr = root; p_ptr != nullptr; p_ptr = p_ptr->next) {
+        if (p_ptr->type != scan)
+            continue;
         if (p_ptr->i_next() == 0)
             return 0;
-        p_ptr = p_ptr->next;
     }
     
     return 1;
@@ -150,6 +315,8 @@ parameter::parameter(char* nm, double v_min, double v_max, unsigned n)
     max_value = v_max;
     n_steps = n;
     
+    expr = nullptr;
+    
     next = root;
     root = this;
     
@@ -158,7 +325,24 @@ parameter::parameter(char* nm, double v_min, double v_max, unsigned n)
     else        d_value = (v_max - v_min) / (double) (n - 1);
 }
 
+parameter::parameter(char* nm, class expression* expr_ptr)
+// assignment type parameter
+{
+    type = assignment;
+    
+    name = nm;
 
+    min_value = 0.0;        // does not matter...
+    max_value = 1.0;
+    n_steps = 0;
+    step_cntr = 0;
+    d_value = 1.0;
+    
+    expr = expr_ptr;        // This is the only thing that matters!
+    
+    next = root;
+    root = this;
+}
 
 parameter * parameter::find_parameter(const char* nm)
 {
@@ -307,7 +491,7 @@ double time_series::peak_search(unsigned int from, unsigned int to, double thr, 
 //
 // Find the next peak staring at <from>
 //
-// Returns: the frational peak location. data points start at location 0
+// Returns: the simulation time of the peak
 //
 // Failure returns: -1.0 = starting peak is above threshold
 //                  -2.0 = ending peak is above threshold
@@ -375,13 +559,149 @@ double time_series::peak_search(unsigned int from, unsigned int to, double thr, 
         
     double imax = - T1*(S0*S4 - S2*S2) / tmp;
     
-    return (double) center + imax;
+    return sim_time((double) center + imax);
 }
 
-
-time_series::time_series(char* nm)
+double time_series::edge_search(unsigned int from, unsigned int to, double min_chg,
+                                double t_window, unsigned int& e_type, unsigned int& end)
+//
+// Search for an edge in the time series. An edge is defined as a change in the value of the
+// time series that exceeds <min_chg>  (>0) over a time period of <t_window> seconds.
+// The search begins at <from> and ends at <to>. The location of the edge is reported in fractional
+// time steps, basically a floating point typed index into the array.
+//
+// The edge is determined by fitting an 3-order polynomical to the edge data and determining the
+// inflection point, that is when the curvature changes, which is the 0-crossing point of the second
+// derivative.
+//
+// Upon success, the reported edge type <e_type> is set to 1 for a rising edge and 0 for a falling edge,
+// and <end> is set to a datum index that can be used as a starting point to locate the next edge.
+//
+// Returns the simulation time of the edge (in seconds)
+// Failures are reported by a negative result:
+// -3.0 : no edge found in interval.
+//
 {
-    name = nm;
+    static lsq_fit *lsq_fit_sys_ptr = nullptr;      // The LSQ fit
+    
+    assert((min_chg > 0.0) && (t_window > 0.0) && (sim_time_incr > 1.0e-15));
+    unsigned d_win = (unsigned) nearbyint(t_window / sim_time_incr);
+    assert((d_win > 0) && (from < to) && (to <=  n_data));
+    
+    //
+    // Search for an edge:
+    //
+    unsigned e_pos = from;
+    do {
+        if ((e_pos + d_win) >= to)
+            return -3.0;                // Window exceeds data range
+        if (fabs(data[e_pos] - data[e_pos + d_win]) >= min_chg)
+            break;                      // Found an edge
+        e_pos++;
+    } while(1);
+    
+    //
+    // To center the search window, a preliminary threshold is determined
+    // and where the time series cross this threshold:
+    //
+    double val_bgn = data[e_pos];
+    double val_end = data[e_pos + d_win];
+    unsigned is_rising = val_end > val_bgn;       // Determine type of edge
+    double threshold = 0.5 * (val_bgn + val_end); // THR = 1/2 way between endpoints
+    while (((data[e_pos] < threshold) == is_rising) && ((e_pos + 1) < to))
+            e_pos++;
+    assert(e_pos < to);
+    
+    //
+    // Now data[e_pos] is the datum just below the threshold and data[e_pos + 1] is
+    // the datum just above the threshold. Switch above/below if this is a falling edge.
+    // The main point is that the threshold is between the data [e_pos] and [e_pos + 1].
+    //
+    // Important nitpicking: if the threshold is equal to either datum, then the value intevals
+    // differ:
+    // rising edge:         [val_begin, thr)[thr, val_end]
+    // falling edge:        [val_begin, thr](thr, val_end]
+    //
+    // Now the window od tata points will be widened symmetrically about the e_pos location.
+    // The threshold is refined after each step. The window is widened one data point at a time.
+    // The data must remain monotonically ordered. Once the windo cannot be extended without
+    // breaking monotonicity or reaching the data range limits, this widening process is complte.
+    //
+    unsigned win_bgn = e_pos;             // The first datum index within the current window
+    unsigned win_end = e_pos + 1;         // The last datum index within the current window
+    
+    while (((win_bgn - 1) >= from) && ((win_end + 1) < to)) {  // The window extension loop
+        val_bgn = data[win_bgn];
+        val_end = data[win_end];
+        threshold = 0.5 * (val_bgn + val_end); // updated THR = 1/2 way between endpoints
+        
+        // The new threshold may require e_pos to move
+        if ((data[e_pos + 1] <  threshold) == is_rising) e_pos++;
+        if ((data[e_pos    ] >= threshold) == is_rising) e_pos--;
+        
+        // Decide which way to extend the window
+        if ((e_pos - win_bgn) > (win_end - (e_pos + 1))) {
+            // Extend towards the beginning
+            if ((data[win_bgn - 1] < val_bgn) == is_rising) win_bgn--;
+            else break; // Window cannot be extend while preserving monotonicity
+        } else {
+            // extend towards the end
+            if ((data[win_end + 1] > val_end) == is_rising) win_end++;
+            else break; // Window cannot be extend while preserving monotonicity   
+        }
+    }
+      
+    //
+    // Now locate the edge within this search window
+    //
+    double edge_time = -3.0;
+    if ((win_end - win_bgn) >= 3) {
+        // we have 4 or more data points. The plan is to fit a 3rd order polynomial to this data
+        // and look for the inflection point (2nd derivative == 0).
+        
+        if (lsq_fit_sys_ptr == nullptr)
+            lsq_fit_sys_ptr = new_lsq_fit (1, 4, polynomial_o3);
+        int ec = init_lsq_fit (lsq_fit_sys_ptr);            // Get ready for the fit
+        assert(ec == 0);
+        
+        for (unsigned i = win_bgn; i <= win_end; i++) {     // add the data points
+            ec = add_lsq_fit  (lsq_fit_sys_ptr, &(data[i]), (double) i);
+            assert(ec == 0);
+        }
+        
+        ec = solve_lsq_fit(lsq_fit_sys_ptr);
+        if (ec == 0) {
+            // got a solution:
+            double x = -coeff_lsq_fit(lsq_fit_sys_ptr, 2) / (3.0 * coeff_lsq_fit(lsq_fit_sys_ptr, 3));
+            // x: value at the inflection point
+            double edge_pos = eval_lsq_fit (lsq_fit_sys_ptr, &x);
+            // edge_pos: fractional position of the edge (should be near e_pos)
+            if ((edge_pos > (double) win_bgn) && (edge_pos < (double) win_end)) {
+                // Fit result passes sanity check
+                edge_time = sim_time(edge_pos);
+            }
+        }
+    }
+    
+    if (edge_time < 0.0) {
+        // Fit failed, or too few data points. Use the threshold crossing
+        // as an approximation to the edge position:
+        val_bgn = data[win_bgn];
+        val_end = data[win_end];
+        threshold = 0.5 * (val_bgn + val_end); // updated THR = 1/2 way between endpoints
+        
+        double edge_pos = (double) win_bgn + (double) (win_end - win_bgn) * 
+                          (threshold - data[win_bgn]) / (data[win_end] - data[win_bgn]);
+        edge_time = sim_time(edge_pos);
+    }
+    
+    end = win_end;
+    e_type = is_rising;
+    return edge_time;
+}
+
+time_series::time_series()
+{
     max_data = n_init;
     data = (double *) malloc(sizeof(double) * max_data);
     reset();
@@ -410,14 +730,6 @@ void time_series::add_datum(double value)
     data[n_data++] = value;
     if (v_max < value) v_max = value;
     if (v_min > value) v_min = value;
-}
-
-int find_ts(time_series *ts[], unsigned n_ts, const char *s)
-{
-    for (int i = 0; i < n_ts; i++)
-        if (!strcmp(ts[i]->get_name(), s))
-            return i;
-    return -1;
 }
 
 int find_peaks(time_series *time, time_series *ts, double *pk_loc, unsigned max_pk)
@@ -456,6 +768,7 @@ int find_peaks(time_series *time, time_series *ts, double *pk_loc, unsigned max_
     return n_pks;
 }
 
+/*
 int locate_peaks(time_series *ts[], unsigned n_ts, const char *nm, double* &pka)
 {
     int i = find_ts(ts, n_ts, nm);
@@ -485,6 +798,7 @@ int locate_peaks(time_series *ts[], unsigned n_ts, const char *nm, double* &pka)
     
     return i;
 }
+*/
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -507,6 +821,9 @@ void define_tran(double t_incr, double t_stop, double t_start, double dT_max)
         fprintf(stderr, "Warning: the .tran statement in the spice deck produces less than 100 rows of output\n");
     
     time_series::set_default_length(n + 16); // adds a little slack
+    
+    sim_time_start = t_start;
+    sim_time_incr = t_incr;
 }
 
 void add_line_to_spice_deck(char *string)
@@ -545,13 +862,260 @@ void define_param_scan(char *name, double v_start, double v_stop, double n_steps
 
 void define_monitor(char *name)
 {
-    new time_series(name);
+    nodes_of_interest *n_ptr = nodes_of_interest::find(name);
+    if (n_ptr != nullptr) {
+        fprintf(stderr, "Line %d: '%s' is already monitored\n", yylineno, name);
+        yy_n_parse_err += 1;
+        return;
+    }
+    
+    n_ptr = new nodes_of_interest(name);
 }
 
 void add_new_line_to_spice_deck()
 {
     circuit.add_nl();
 }
+
+// expression related functions:
+
+void define_para_expression(char *name, void *expr)
+// Defines a new expression type parameter
+{
+    parameter *p_ptr = parameter::find_parameter(name);
+    if (p_ptr != nullptr) {
+        fprintf(stderr, "Line %d: redefinition of '%s'\n", yylineno, name);
+        yy_n_parse_err += 1;
+        return;
+    }
+    
+    p_ptr = new parameter(name, (expression *) expr);
+}
+
+void *define_add(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, addition, (expression *) y);
+}
+
+void *define_sub(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, subtraction, (expression *) y);
+}
+
+void *define_mul(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, multiplication, (expression *) y);
+}
+void *define_div(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, division, (expression *) y);
+}
+
+void *define_const(double x)
+// Just a constant
+{
+    return new expression(x);
+}
+
+void *define_ref(char *name)
+{
+    parameter *p_ptr = parameter::find_parameter(name);
+    if (p_ptr == nullptr) {
+        fprintf(stderr, "Line %d: reference to undefined paramer '%s' - needs to be defined first\n", yylineno, name);
+        yy_n_parse_err += 1;
+        return nullptr;
+    }
+    
+    return new expression(p_ptr);
+}
+
+void *define_function1(char *name, void *x)
+// Produce a void * define_function1(char* name, void* x)
+{
+    for (unsigned i = 0; func1_tab[i].name != nullptr; i++)
+        if (!strcmp(name, func1_tab[i].name))
+            return new expression(func1_tab[i].func1_ptr, (expression *) x);
+    fprintf(stderr, "Line %d: undefined function '%s'\n", yylineno, name);
+    yy_n_parse_err += 1;
+    return nullptr;
+}
+
+void *define_function2(char *name, char *ts_name, void *y)
+// defines function on time time_series::~time_series()
+{
+    double      (*f_ptr) (class nodes_of_interest *noi_ptr, double x) = nullptr;
+    for (unsigned i = 0; func2_tab[i].name != nullptr; i++)
+        if (!strcmp(name, func2_tab[i].name)) {
+            f_ptr = func2_tab[i].func2_ptr;
+            break;
+        }
+            
+    nodes_of_interest *n_ptr = nodes_of_interest::find(ts_name);
+    
+    if ((f_ptr == nullptr) || (n_ptr == nullptr)) {
+        fprintf(stderr, "Line %d: function or monitored column undefined\n", yylineno);
+        yy_n_parse_err += 1;
+        return nullptr;
+    }
+
+    return new expression(f_ptr, n_ptr, (expression *) y);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Analysis functions
+//
+
+double locate_peak(nodes_of_interest *noi_ptr, double x)
+//
+// The node of interest is expected to be a voltage time series and this fuction will determine the
+// time of the x-th peak. <x> is expected to be an integer and peaks are numbered 0,1,2,...
+//
+// A NAN is returned upon failure
+//
+{
+    int n_peak = (int) nearbyint(x);
+    if (n_peak < 0)
+        return NAN;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < max_ts));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+    
+    unsigned i = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        double ip = ts_ptr->peak_search(i, imax, threshold_frac * ts_ptr->get_max(),
+                                        threshold_hyst * ts_ptr->get_max(), next);
+        if (ip < 0)
+            return NAN;                 // Fail: no peak found
+        
+        if (n_peak == 0)
+            return sim_time(ip);        // Success: that is the desired peak
+
+        n_peak--;                       // Not this one ...
+        i = next;
+        
+    } while (1);
+}
+
+double locate_rise(nodes_of_interest *noi_ptr, double x)
+//
+// Similar to the peak seach, but locate the rising edge of a phase transition.
+// The node of interest ought to be a phase column and a rising transition mean that the phase
+// increases by about 1 turn (2PI). Rising transitions are relative, so a stair-case function
+// will have multiple rising transitions. The time of the transition is defined to be the
+// Inflection point, where the slope stops rising and starts falling: zero cossing of the
+// second derivative.
+//
+{
+    int n_peak = (int) nearbyint(x);
+    if (n_peak < 0)
+        return NAN;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < max_ts));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+   
+    unsigned imin = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        unsigned edge_type;
+        double tx = ts_ptr->edge_search(imin, imax, edge_search_min_chg * 2.0 * M_PI, edge_search_t_win,
+                                        edge_type, next);
+        if (tx < 0.0)
+            break;                      // Fail: no edge found
+        imin = next;                    // Prepare next sarch
+        
+        if (edge_type != 1)
+            continue;                   // Wrong kind f edge
+        
+        if (n_peak == 0)
+            return tx;                  // Success: that is the desired peak
+
+        n_peak--;                       // Not this one ...
+        
+    } while (1);   
+    
+    return NAN;
+}
+
+double locate_fall(nodes_of_interest *noi_ptr, double x)
+{
+    int n_peak = (int) nearbyint(x);
+    if (n_peak < 0)
+        return NAN;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < max_ts));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+   
+    unsigned imin = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        unsigned edge_type;
+        double tx = ts_ptr->edge_search(imin, imax, edge_search_min_chg * 2.0 * M_PI, edge_search_t_win,
+                                        edge_type, next);
+        if (tx < 0.0)
+            break;                      // Fail: no edge found
+        imin = next;                    // Prepare next sarch
+        
+        if (edge_type != 0)
+            continue;                   // Wrong kind f edge
+        
+        if (n_peak == 0)
+            return tx;                  // Success: that is the desired peak
+
+        n_peak--;                       // Not this one ...
+        
+    } while (1);   
+    
+    return NAN;
+}
+
+double locate_edge(nodes_of_interest *noi_ptr, double x)
+// Dito, but locates any edge (rising or falling
+{
+    int n_peak = (int) nearbyint(x);
+    if (n_peak < 0)
+        return NAN;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < max_ts));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+   
+    unsigned imin = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        unsigned edge_type;
+        double tx = ts_ptr->edge_search(imin, imax, edge_search_min_chg * 2.0 * M_PI, edge_search_t_win,
+                                        edge_type, next);
+        if (tx < 0.0)
+            break;                      // Fail: no edge found
+        imin = next;                    // Prepare next sarch
+        
+        if (n_peak == 0)
+            return tx;                  // Success: that is the desired peak
+
+        n_peak--;                       // Not this one ...
+        
+    } while (1);   
+    
+    return NAN;
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -580,34 +1144,17 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
         exit(1);
     }
-    
-    circuit.write_cir_file("q.txt");
-    
-/*
-    char *buf = new char[max_ln_length];
-    time_series *ts[max_ts];
-    for (unsigned i = 0; i < max_ts; i++) ts[i] = nullptr;
-    unsigned n_ts = 0;
-
-    t_of_peaks top[n_noi];
-    for (int i = 0; i < n_noi; i++)
-        top[i].t_pks = nullptr;
-    
+        
     FILE *sum_fp = fopen("Summary.dat", "w");
     assert(sum_fp != nullptr);
     fprintf(sum_fp, "#");
     parameter::list_names(sum_fp);
-//    fprintf(sum_fp, " slop(N5/N9) min_delay avg_delay max_delay A:min_delay A:avg_delay A:max_delay\n");
-    fprintf(sum_fp, " peak-times for");
-    for (unsigned i; i < n_noi; i++)
-        fprintf(sum_fp, " %s", nodes_of_interest[i]);
     fprintf(sum_fp, "\n");
 
     //
     // Initialization and setup done.
     //
-    for (unsigned n_sim = 0; 1; n_sim++) {
-        n_ts = 0;
+    while (1) {
         //
         // Do the actual work:
         //   1. Run JoSIM with the edited circuit file
@@ -631,7 +1178,7 @@ int main(int argc, char *argv[])
             exit(1);
         }
     
-        if (sd.write_cir_file(cir_inp_path)) {
+        if (circuit.write_cir_file(cir_inp_path)) {
             fprintf(stderr, "failed to write the spice deck to JoSim\n");
             exit(1);
         }
@@ -645,7 +1192,8 @@ int main(int argc, char *argv[])
         //
         // Process first line of CVS file
         //
-        if (!fgets(buf, max_ln_length - 1, inpf) || strlen(buf) > (max_ln_length -4)) {
+        if (!fgets(josim_output_buf, max_ln_length - 1, inpf) ||
+            strlen(josim_output_buf) > (max_ln_length -4)) {            // Meant to detect buffer overflow
             fprintf(stderr, "Failed to read first line\n");
             exit(1);
         }
@@ -655,133 +1203,129 @@ int main(int argc, char *argv[])
             //
             // Discard white space and doublle quotes
             //
-            char *tmp = buf;
-            for (buf_p = buf; *buf_p; buf_p++)
-                if (*buf_p != '"' && *buf_p != ' ' && *buf_p != '\t' && *buf_p != '\n')
+            char *tmp = josim_output_buf;
+            for (buf_p = josim_output_buf; *buf_p; buf_p++)
+                if ((*buf_p != '"') && (*buf_p != ' ') && (*buf_p != '\t') && (*buf_p != '\n'))
                     *tmp++ = *buf_p;
             *tmp = 0;
         }
     
-        buf_p = buf;
-        int last;
-        do {
+        buf_p = josim_output_buf;
+        for (unsigned ic = 0; ic < max_ts; ic++) {
             char *tmp = buf_p;
             while (*tmp && (*tmp != ',')) tmp++;    // Find end of string
-            last = !*tmp;
-            *tmp = 0;
-            if (ts[n_ts] != nullptr) ts[n_ts]->reset(buf_p);
-            else                     ts[n_ts] = new time_series(buf_p);
-            n_ts++;
+            int last = !*tmp;       // Set if this is the last comun
+            *tmp = 0;               // Replance comma with 0
             buf_p = tmp + 1;
-        } while (last == 0);
-    
-        // printf("Detected %u columns\n", n_ts);
-    
+            //
+            // tmp is now pointing to the name string for this column
+            //
+            nodes_of_interest *noi_ptr = nodes_of_interest::find(tmp);
+            if (n_josim_runs == 0) {
+                // First Josim run: allocate the ts for the NOI's
+                if (noi_ptr == nullptr) {
+                    // Don't care about this column
+                    josim_out_columns[ic] = nullptr;
+                } else {
+                    josim_out_columns[ic] = new time_series();
+                    if (noi_ptr->set_col_index(ic)) {
+                        fprintf(stderr, "Josim output has multiple columns named '%s'\n", tmp);
+                        exit(1);
+                    }
+                }
+            } else {
+                // Verify that the column order is the same as the first running
+                if (noi_ptr != nullptr) {
+                    if (ic != noi_ptr->get_col_index()) {
+                        fprintf(stderr, "Josim run %u: column order has changed\n", n_josim_runs + 1);
+                        exit(1);
+                    }
+                    josim_out_columns[ic]->reset();         // Reset the TS to accept new data
+                }
+            }
+            
+            if (last) {
+                if (n_josim_runs == 0) {
+                    n_josim_out_columns = ic + 1;
+                    printf("Detected %u columns\n", n_josim_out_columns);
+                }
+                break;
+            }
+            
+            if ((ic + 1) >= max_ts) {
+                fprintf(stderr, "Josim output: too many columns - increase max_ts\n");
+                exit(1);
+            }
+        }
+        
+        if (n_josim_runs == 0) {
+            // Verify that all NOI's are defined
+            nodes_of_interest *n_ptr = nodes_of_interest::find_undef();
+            if (n_ptr != nullptr) {
+                fprintf(stderr, "Node of interest '%s' not found in Josim output\n", n_ptr->get_name());
+                exit(1);
+            }
+        }
+
         //
         // Now read the data (in CSV format)
         //
         int line_no = 1;
         do {
             line_no++;
-            if (!fgets(buf, max_ln_length - 1, inpf))
+            if (!fgets(josim_output_buf, max_ln_length - 1, inpf))
                 break;                             // Input file exhausetd
-            buf_p = buf;
+            buf_p = josim_output_buf;
             double val;
             int nc;
-            for (int i = 0; i < n_ts; i++) {
+            for (int i = 0; i < n_josim_out_columns; i++) {
                 if (1 > sscanf(buf_p,"%lf%n", &val, &nc)) {
-                    fprintf(stderr, "Failed to digest line %d\n", line_no);
+                    fprintf(stderr, "Josim run %u: Failed to digest line %d\n", n_josim_runs + 1, line_no);
                     exit(1);
                 }
-                ts[i]->add_datum(val);
+                if (i == 0) {
+                    // Verify time column
+                    if (fabs(val - sim_time((double)(line_no - 2))) > 0.1e-12) {
+                        fprintf(stderr, "Josim output on line %d: time expected %.10lg time found %.10lg\n",
+                                line_no, sim_time((double)(line_no - 2)), val);
+                        exit(1);
+                    }
+                }
+                if (josim_out_columns[i] != nullptr)
+                    josim_out_columns[i]->add_datum(val);   // Selectively add data
                 buf_p += nc +1;
             }
         } while (1);
         
         fclose(inpf);
     
-        // printf("Read %d rows of data\n", line_no);
+        if (n_josim_runs == 0) printf("Read %d rows of data\n", line_no);
     
         ///////////////////////////////////////////////////////////////////////////////////////////
         // 3 Analyze the simulation results                                                      // 
         ///////////////////////////////////////////////////////////////////////////////////////////
         //
-        // Save the time delta...
+        // Analysis is primarily done via parameter expressions
         //
-        unsigned min_n_pks = ~0u, max_n_pks = 0;
-        for (unsigned i = 0; i < n_noi; i++) {
-            //
-            // For each node of interest, locate all the peaks in the time series
-            //
-            if (top[i].t_pks != nullptr)
-                delete[] top[i].t_pks;
-            top[i].t_pks = nullptr;
-            top[i].n_pks = 0;
-            int j = locate_peaks(ts, n_ts, nodes_of_interest[i], top[i].t_pks);
-            if (j <= 0) {
-                // Failed to locate peaks:
-                min_n_pks = 0;
-                top[i].n_pks = 0;
-                continue;
-            }
-            top[i].n_pks = j;
-            if (min_n_pks > j)
-                min_n_pks = j;
-            if (max_n_pks < j)
-                max_n_pks = j;
-        }
-        // Note: if the min/max #of peaks are not the same, the simulation is suspect!
-        //       this usually happens when some pules do not traverse the jtl until the end
-        //       or if the delay exceeds the period so that at the end of the simulation
-        //       some peaks are beyond the simulation time limit.
-        
-        
-        for (unsigned i = 0; i < n_noi; i++) {
-            //
-            // Print the first peack > 50ps
-            //
-            unsigned pk_found = 0;
-            for (unsigned j = 0; j < top[i].n_pks; j++) {
-                double t = top[i].t_pks[j] * 1.0e12;
-                if (t > 50.0) {
-                    // peak is past 50ps (initialization phase)
-                    fprintf(sum_fp, " %.15lg", t);
-                    pk_found = 1;
-                    break;
-                }
-            }
-            
-            if (!pk_found) fprintf(sum_fp, " 0");
-        }
+        parameter::list_c_val(sum_fp);
         fprintf(sum_fp, "\n");
-*/
-/*
-        sprintf(buf, "delay_%u.dat", n_sim);
-        FILE *of = fopen(buf, "w");
-        assert(of);
-        fprintf(of, "#");
-        parameter::list_names(of);
-        fprintf(of, "\n#");
-        parameter::list_c_val(of);
-        fprintf(of, "\n");
+
+        n_josim_runs++;                         // Done with this run
+        if (parameter::advance())
+            break;
+    }
     
-        for(unsigned i = 0; i < min_n_pks; i++) {
-            fprintf(of, "%.9lg %.9lg %.9lg %.9lg %.9lg %.9lg %.9lg\n", 
-                    (top[0].t_pks[i] - top[1].t_pks[i]) * 1.0e12,
-                    (top[2].t_pks[i] - top[3].t_pks[i]) * 1.0e12,
-                    (top[4].t_pks[i] - top[5].t_pks[i]) * 1.0e12,
-                    (top[6].t_pks[i] - top[7].t_pks[i]) * 1.0e12,
-                    (top[8].t_pks[i] - top[9].t_pks[i]) * 1.0e12,
-                    (top[8].t_pks[i] - top[0].t_pks[i]) * 1.0e12,
-                    (top[9].t_pks[i] - top[1].t_pks[i]) * 1.0e12
-            );
-        }
-   
-        fclose(of);
-        
-        //
-        // Overall analysis:
-        //
+    fclose(sum_fp);
+
+    exit(0);
+}
+
+void misc()
+{
+    //
+    // Just some code from previous iterations that may be useful
+    //
+/*
         double slope = 0.0;
         unsigned n_sp = (min_n_pks < n_slope_pks) ? min_n_pks : n_slope_pks;
         if (n_sp >= 2) {
@@ -840,13 +1384,4 @@ int main(int argc, char *argv[])
                   min_dly * 1.0e12,   avg_dly * 1.0e12,   max_dly * 1.0e12,
                 A_min_dly * 1.0e12, A_avg_dly * 1.0e12, A_max_dly * 1.0e12);
 */
-/*
-        
-        if (parameter::advance())
-            break;
-    }
-    
-    fclose(sum_fp);
-*/
-    exit(0);
 }

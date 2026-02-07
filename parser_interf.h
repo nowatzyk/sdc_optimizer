@@ -30,4 +30,14 @@ void define_tran(double t_incr, double t_stop, double t_start, double dT_max);
 void define_param_scan(char *name, double v_start, double v_stop, double n_steps);
 void define_monitor(char *name);
 
+void define_para_expression(char *name, void *expr);
+void *define_add(void *x, void *y);
+void *define_sub(void *x, void *y);
+void *define_mul(void *x, void *y);
+void *define_div(void *x, void *y);
+void *define_const(double x);
+void *define_ref(char *name);
+void *define_function1(char *name, void *x);
+void *define_function2(char *name, char *ts_name, void *y);
+
 #endif

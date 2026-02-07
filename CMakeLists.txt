@@ -22,6 +22,8 @@ ADD_FLEX_BISON_DEPENDENCY(pragma_lexer pragma_parser)
 
 add_executable(csv_analyzer
     main.cpp
+    lsq_fit.c
+    fit_functions.c
     ${BISON_pragma_parser_OUTPUTS}
     ${FLEX_pragma_lexer_OUTPUTS}
 )
