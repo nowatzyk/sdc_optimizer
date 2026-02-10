@@ -51,19 +51,19 @@ pragma_body:
     ;
     
 expr:
-        terminal                            { $1; }
-    |   expr PLUS terminal                  { define_add($1, $3); }
-    |   expr MINUS terminal                 { define_sub($1, $3); }
-    |   expr MULT terminal                  { define_mul($1, $3); }
-    |   expr DIVIDE terminal                { define_div($1, $3); }
-    |   OPAR expr CPAR                      { $2; }
+        terminal                            { $$ = $1; }
+    |   expr PLUS terminal                  { $$ = define_add($1, $3); }
+    |   expr MINUS terminal                 { $$ = define_sub($1, $3); }
+    |   expr MULT terminal                  { $$ = define_mul($1, $3); }
+    |   expr DIVIDE terminal                { $$ = define_div($1, $3); }
+    |   OPAR expr CPAR                      { $$ = $2; }
     ;
     
 terminal:
-        NUMBER                              { define_const($1); }
-    |   SYMBOL OPAR expr CPAR               { define_function1($1, $3); }
-    |   SYMBOL OPAR SYMBOL COMMA expr CPAR  { define_function2($1, $3, $5); }
-    |   SYMBOL                              { define_ref($1); }
+        NUMBER                              { $$ = define_const($1); }
+    |   SYMBOL OPAR expr CPAR               { $$ = define_function1($1, $3); }
+    |   SYMBOL OPAR SYMBOL COMMA expr CPAR  { $$ = define_function2($1, $3, $5); }
+    |   SYMBOL                              { $$ = define_ref($1); }
     ;
         
 %%

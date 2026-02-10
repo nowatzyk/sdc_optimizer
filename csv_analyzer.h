@@ -18,7 +18,7 @@ const char spice_escape = '~';              // Escape character in spice decks f
 
 const double edge_search_min_chg = 0.6667;  // For an edge search on a phase, this is the min change required
                                             // to be considered an edge (in fractions of a turn, = 2PI phase)
-const double edge_search_t_win = 2.0e-12;   // max edge transition time 2 pico-seconds 
+const double edge_search_t_win = 10.0e-12;   // max edge transition time 10 pico-seconds 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -65,6 +65,9 @@ public:
     unsigned    set_col_index(unsigned n);  // Set the column index, return != 0 if there is a problem
     const char *get_name() {return name;};
     static nodes_of_interest *find_undef(); // Returns point to the first NOI with col_index < 0
+    
+    int print(char *f_name);
+    static void print_all();                // Saves all NOI's to files
 };
 
 // Some related function definitione:
@@ -217,6 +220,8 @@ public:
     double      peak_search(unsigned from, unsigned to, double thr, double eps, unsigned &end);
     double      edge_search(unsigned from, unsigned to, double min_chg, double t_window,
                             unsigned &e_type, unsigned &end);
+    
+    void        print_all(FILE *fp);        // Dump all data to a file
     
     static void set_default_length(unsigned n);  // Just set a default length
 };

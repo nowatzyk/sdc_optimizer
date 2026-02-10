@@ -127,6 +127,33 @@ nodes_of_interest *nodes_of_interest::find_undef()
     return nullptr;
 }
 
+int nodes_of_interest::print(char* f_name)
+{
+    FILE *of = fopen(f_name, "w");
+    if (of == nullptr)
+        return 1;
+    fprintf(of, "# NOI name: %s\n", name);
+    if ((col_index < 0) || (col_index >= max_ts) || (josim_out_columns[col_index] == nullptr))
+        fprintf(of, "# has no data\n");
+    else
+        josim_out_columns[col_index]->print_all(of);
+    fclose(of);
+    
+    return 0;       // success
+}
+
+void nodes_of_interest::print_all()
+{
+    unsigned i = 0;
+    for (nodes_of_interest *n_ptr = root; n_ptr != nullptr; n_ptr = n_ptr->next) {
+        char buf[64];
+        sprintf(buf, "NOI_%u.dat", i);
+        n_ptr->print(buf);
+        i++;
+    }
+}
+
+
 //////
 
 expression::expression(double x)
@@ -681,6 +708,17 @@ double time_series::edge_search(unsigned int from, unsigned int to, double min_c
                 edge_time = sim_time(edge_pos);
             }
         }
+        {
+            FILE *of = fopen("q.dat", "w");
+            assert(of);
+            double dy = (data[win_end] - data[win_bgn]) / 200.0;
+            for (double y = data[win_bgn]; y <= data[win_end]; y += dy) {
+                double ep = eval_lsq_fit (lsq_fit_sys_ptr, &y);
+                fprintf(of, "%.6lg %.6lg %.6lg\n", sim_time(ep), y, (edge_time < sim_time(ep)) ?
+                    data[win_end] : data[win_bgn]);
+            }
+            fclose(of);
+        }
     }
     
     if (edge_time < 0.0) {
@@ -731,6 +769,13 @@ void time_series::add_datum(double value)
     if (v_max < value) v_max = value;
     if (v_min > value) v_min = value;
 }
+
+void time_series::print_all(FILE* fp)
+{
+    for (unsigned i = 0; i < n_data; i++)
+        fprintf(fp, "%.6lg %.12lg\n", sim_time((double) i), data[i]);
+}
+
 
 int find_peaks(time_series *time, time_series *ts, double *pk_loc, unsigned max_pk)
 //
@@ -918,7 +963,8 @@ void *define_div(void *x, void *y)
 void *define_const(double x)
 // Just a constant
 {
-    return new expression(x);
+    expression *e_ptr = new expression(x);
+    return e_ptr;
 }
 
 void *define_ref(char *name)
@@ -1214,13 +1260,12 @@ int main(int argc, char *argv[])
         for (unsigned ic = 0; ic < max_ts; ic++) {
             char *tmp = buf_p;
             while (*tmp && (*tmp != ',')) tmp++;    // Find end of string
-            int last = !*tmp;       // Set if this is the last comun
+            int last = !*tmp;       // Set if this is the last colun
             *tmp = 0;               // Replance comma with 0
-            buf_p = tmp + 1;
             //
-            // tmp is now pointing to the name string for this column
+            // buf_p is now pointing to the name string for this column
             //
-            nodes_of_interest *noi_ptr = nodes_of_interest::find(tmp);
+            nodes_of_interest *noi_ptr = nodes_of_interest::find(buf_p);
             if (n_josim_runs == 0) {
                 // First Josim run: allocate the ts for the NOI's
                 if (noi_ptr == nullptr) {
@@ -1256,6 +1301,8 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Josim output: too many columns - increase max_ts\n");
                 exit(1);
             }
+            
+            buf_p = tmp + 1;
         }
         
         if (n_josim_runs == 0) {
@@ -1307,6 +1354,7 @@ int main(int argc, char *argv[])
         //
         // Analysis is primarily done via parameter expressions
         //
+        nodes_of_interest::print_all();
         parameter::list_c_val(sum_fp);
         fprintf(sum_fp, "\n");
 

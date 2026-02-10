@@ -42,13 +42,13 @@
 
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     
-<IN_PRAGMA>[a-zA-Z][a-zA-Z0-9_|]+ { yylval.text = strdup(yytext); return SYMBOL; }
+<IN_PRAGMA>[a-zA-Z][a-zA-Z0-9_|()]+ { yylval.text = strdup(yytext); return SYMBOL; }
 
 <IN_PRAGMA>"="      { return ASSIGN; }
 <IN_PRAGMA>"+"      { return PLUS; }
 <IN_PRAGMA>"-"      { return MINUS; }
-<IN_PRAGMA>"("      { return OPAR; }
-<IN_PRAGMA>")"      { return CPAR; }
+<IN_PRAGMA>"["      { return OPAR; }
+<IN_PRAGMA>"]"      { return CPAR; }
 <IN_PRAGMA>"*"      { return MULT; }
 <IN_PRAGMA>"/"      { return DIVIDE; }
 <IN_PRAGMA>","      { return COMMA; }
