@@ -43,7 +43,7 @@
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     
 <IN_PRAGMA>[a-zA-Z][a-zA-Z0-9_]* { yylval.text = strdup(yytext); return SYMBOL; }
-<IN_PRAGMA>\"[^\n\t\" ]+\n { // Symbol can be arbitrary text that is in double quotes
+<IN_PRAGMA>\"[^\n\t\" ]+\" { // Symbol can be arbitrary text that is in double quotes
                         yytext[strlen(yytext) - 1] = 0;
                         yylval.text = strdup(yytext+1);
                         return SYMBOL;
@@ -59,6 +59,12 @@
 <IN_PRAGMA>","      { return COMMA; }
 <IN_PRAGMA>"?"      { return TEST_OP; }
 <IN_PRAGMA>":"      { return OTHERWISE; }
+<IN_PRAGMA>"=="     { return COMP_EQ; }
+<IN_PRAGMA>"!="     { return COMP_NE; }
+<IN_PRAGMA>">"      { return COMP_GT; }
+<IN_PRAGMA>">="     { return COMP_GE; }
+<IN_PRAGMA>"<="     { return COMP_LE; }
+<IN_PRAGMA>"<"      { return COMP_LT; }
 
 <IN_PRAGMA>.        { fprintf(stderr, "Line %d: Unrecognized pragma character in *.cir file: '%s'\n", yylineno, yytext); } 
 

@@ -40,5 +40,11 @@ void *define_ref(char *name);
 void *define_function1(char *name, void *x);
 void *define_function2(char *name, char *ts_name, void *y);
 void *define_test_sel(void *t, void *a, void *b);
+void *define_eq(void *x, void *y);
+void *define_ne(void *x, void *y);
+void *define_gt(void *x, void *y);
+void *define_ge(void *x, void *y);
+void *define_le(void *x, void *y);
+void *define_lt(void *x, void *y);
 
 #endif

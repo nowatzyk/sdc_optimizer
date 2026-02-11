@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 extern "C" {
 #include "parser.h"                         // Bison generated headers (in build dir)
@@ -190,7 +192,8 @@ expression::expression(double (*f_ptr) (double), expression* arg_ptr)
 
 expression::expression(expression* la_ptr, exp_type et, expression* ra_ptr)
 {
-    assert((et == addition) || (et == subtraction) || (et == multiplication) || (et == division));
+    assert((et == addition) || (et == subtraction) || (et == multiplication) || (et == division) ||
+           (et == comp_eq) || (et == comp_ne)  || (et == comp_lt) || (et == comp_le) || (et == comp_gt) || (et == comp_ge) );
     type = et;
     value = 0.0;
     l_arg = la_ptr;
@@ -249,7 +252,7 @@ double expression::get_value()
             return value;
             
         case sum_func:
-            value += l_arg->get_value();
+            value += l_arg->get_value();        // Note: this one is different - it has a side-effect
             return value;
             
         case function1:
@@ -275,6 +278,24 @@ double expression::get_value()
             
         case test_select:
             return (t_arg->get_value() > 0.0) ? l_arg->get_value() : r_arg->get_value();
+            
+        case comp_eq:
+            return (l_arg->get_value() == r_arg->get_value()) ? 1.0 : 0.0;
+            
+        case comp_ne:
+            return (l_arg->get_value() != r_arg->get_value()) ? 1.0 : 0.0;
+            
+        case comp_gt:
+            return (l_arg->get_value() > r_arg->get_value()) ? 1.0 : 0.0;
+            
+        case comp_ge:
+            return (l_arg->get_value() >= r_arg->get_value()) ? 1.0 : 0.0;
+            
+        case comp_lt:
+            return (l_arg->get_value() < r_arg->get_value()) ? 1.0 : 0.0;
+            
+        case comp_le:
+            return (l_arg->get_value() <= r_arg->get_value()) ? 1.0 : 0.0;
             
         default: assert(0);
     }
@@ -347,21 +368,28 @@ void parameter::list_c_val(FILE* fp)
     }
 }
 
-int parameter::advance()
+int parameter::advance(unsigned &lvl)
 //
 // Advance the parameter values. Returns 1 when all combinations are done, 0 otherwise
+//
+// <lvl> is set to highest nesting level that was advanced. This is used in the summary report
+// so that a plot function can use this info to only use data points that are a function of
+// the innermost loop(s) having been completed.
 //
 {
     for (unsigned level = 0; level < nesting_level; level++) {
 
-        if (iterator[level].param_ptr->i_next() == 0)
+        if (iterator[level].param_ptr->i_next() == 0) {
+            lvl = level;
             return 0;
-
+        }
+        
         // Level <level> completed. Need to zero any sums over this level:
         for (zel_element *z_ptr = iterator[level].zel_ptr; z_ptr != nullptr; z_ptr = z_ptr->next)
             z_ptr->e_ptr->zero_sum();
     }
 
+    lvl = nesting_level - 1;
     return 1;
 }
 
@@ -1000,10 +1028,47 @@ void *define_mul(void *x, void *y)
 {
     return new expression((expression *) x, multiplication, (expression *) y);
 }
+
 void *define_div(void *x, void *y)
 // Just an add op
 {
     return new expression((expression *) x, division, (expression *) y);
+}
+
+void *define_eq(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, comp_eq, (expression *) y);
+}
+
+void *define_ne(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, comp_ne, (expression *) y);
+}
+
+void *define_gt(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, comp_gt, (expression *) y);
+}
+
+void *define_ge(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, comp_ge, (expression *) y);
+}
+
+void *define_lt(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, comp_lt, (expression *) y);
+}
+
+void *define_le(void *x, void *y)
+// Just an add op
+{
+    return new expression((expression *) x, comp_le, (expression *) y);
 }
 
 void *define_const(double x)
@@ -1017,7 +1082,7 @@ void *define_ref(char *name)
 {
     parameter *p_ptr = parameter::find_parameter(name);
     if (p_ptr == nullptr) {
-        fprintf(stderr, "Line %d: reference to undefined paramer '%s' - needs to be defined first\n", yylineno, name);
+        fprintf(stderr, "Line %d: reference to undefined parameter '%s' - needs to be defined first\n", yylineno, name);
         yy_n_parse_err += 1;
         return nullptr;
     }
@@ -1317,7 +1382,7 @@ int main(int argc, char *argv[])
     assert(sum_fp != nullptr);
     fprintf(sum_fp, "#");
     parameter::list_names(sum_fp);
-    fprintf(sum_fp, "\n");
+    fprintf(sum_fp, " level\n");
 
     //
     // Initialization and setup done.
@@ -1467,8 +1532,11 @@ int main(int argc, char *argv[])
         } while (1);
         
         fclose(inpf);
+        
+        int status;
+        waitpid(child_pid, &status, 0);         // reap the child process
     
-        if (n_josim_runs == 0) printf("Read %d rows of data\n", line_no);
+        if (n_josim_runs == 0) printf("Read %d rows of data, exit status=%d\n", line_no, status);
     
         ///////////////////////////////////////////////////////////////////////////////////////////
         // 3 Analyze the simulation results                                                      // 
@@ -1476,12 +1544,15 @@ int main(int argc, char *argv[])
         //
         // Analysis is primarily done via parameter expressions
         //
-        nodes_of_interest::print_all();
+//        nodes_of_interest::print_all();
         parameter::list_c_val(sum_fp);
-        fprintf(sum_fp, "\n");
 
+        unsigned level;
         n_josim_runs++;                         // Done with this run
-        if (parameter::advance())
+        unsigned all_done = parameter::advance(level);
+        fprintf(sum_fp, " %u\n", level);
+        
+        if (all_done)
             break;
     }
     

@@ -92,7 +92,13 @@ enum    exp_type {                          // Type of expression
                 subtraction,
                 multiplication,
                 division,
-                test_select
+                test_select,
+                comp_eq,
+                comp_ne,
+                comp_gt,
+                comp_ge,
+                comp_lt,
+                comp_le
                 };
 
 class expression {
@@ -165,7 +171,7 @@ public:
     parameter(char *nm, class expression *expr); // creates an assignment type parameter
     
     static void reset();                    // Go back to initial state
-    static int  advance();                  // Advance to next value combination, returns != 0 when exhausted
+    static int  advance(unsigned &level);   // Advance to next value combination, returns != 0 when exhausted
     
     static void list_names(FILE *fp);       // adds names to file (preceeded by space, followed by nothing)
     static void list_c_val(FILE *fp);       // list the current values, like above
