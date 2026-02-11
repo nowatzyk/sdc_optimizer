@@ -21,7 +21,7 @@ int yylex(void);
 %token <text> END LINE SYMBOL PSUBSTITUTION
 %token <val> NUMBER
 %type <pointer> expr terminal
-%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER OPAR CPAR ASSIGN COMMA
+%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER OPAR CPAR ASSIGN COMMA TEST_OP OTHERWISE
 
 %left PLUS MINUS
 %left MULT DIVIDE
@@ -57,6 +57,7 @@ expr:
     |   expr MULT terminal                  { $$ = define_mul($1, $3); }
     |   expr DIVIDE terminal                { $$ = define_div($1, $3); }
     |   OPAR expr CPAR                      { $$ = $2; }
+    |   expr TEST_OP expr OTHERWISE expr    { $$ = define_test_sel($1, $3, $5); }
     ;
     
 terminal:

@@ -12,13 +12,15 @@ const double threshold_hyst = 0.01;         // Hysteresis to avoid noise induced
 const unsigned max_pks = 1024;              // needed to allocate arrays for peaks:
                                             // Peaks are located first and then analyzed
 
-const unsigned parameter_name_lim = 64;     // Max symbol name length for parameters
+const unsigned max_param_iterators = 16;    // Should be plenty
 const unsigned spice_src_max_char = 1024;   // Max line length in spice source file
 const char spice_escape = '~';              // Escape character in spice decks for parameter substitutions
 
 const double edge_search_min_chg = 0.6667;  // For an edge search on a phase, this is the min change required
                                             // to be considered an edge (in fractions of a turn, = 2PI phase)
-const double edge_search_t_win = 10.0e-12;   // max edge transition time 10 pico-seconds 
+const double edge_search_t_win = 10.0e-12;  // max edge transition time 10 pico-seconds
+const double edge_search_slope_frac = 1.0; // Defines the fraction of the min_chg (see above) that is used to
+                                            // to determine the transition point
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -72,21 +74,25 @@ public:
 
 // Some related function definitione:
 double locate_peak(nodes_of_interest *noi_ptr, double x);
+double count_peaks(nodes_of_interest *noi_ptr, double x);
 double locate_rise(nodes_of_interest *noi_ptr, double x);
 double locate_fall(nodes_of_interest *noi_ptr, double x);
 double locate_edge(nodes_of_interest *noi_ptr, double x);
+double count_edges(nodes_of_interest *noi_ptr, double x);
 
 class parameter;                            // Forward declaration so that it can be used in the expression class
     
 enum    exp_type {                          // Type of expression
-                constant, 
+                constant,
+                sum_func,
                 function1,                  // Function with 1 argument
                 function2,                  // function with 2 arguments
                 p_reference,
                 addition,
                 subtraction,
                 multiplication,
-                division
+                division,
+                test_select
                 };
 
 class expression {
@@ -94,7 +100,8 @@ class expression {
     exp_type    type;                       // Type of this expression element
             
     expression  *l_arg, *r_arg;             // Pointers to the left/right arguments
-    double      value;                      // the value (if this is a constant
+    expression  *t_arg;                     // A 3rd argument, needed for thest-select op
+    double      value;                      // the value (if this is a constant or a sum)
     double      (*func1_ptr)(double x);     // Function1 pointer
     double      (*func2_ptr)(class nodes_of_interest *noi_ptr, double x);     // Function2 pointer
     parameter   *p_ptr;                     // Parameter pointer
@@ -109,8 +116,20 @@ public:
                  expression *arg_ptr);
     expression  (expression *la_ptr, exp_type et, expression *ra_ptr); // creates a prmitive op
     expression  (parameter *p_ptr);         // Creates a parameter reference
+    expression  (expression *test_ptr, expression *true_arg, expression *false_arg);
     
     double      get_value();                // Returns the current value of this expression
+    void        zero_sum() {assert(type == sum_func); value = 0.0;}   // Should only be used on sums
+};
+
+struct zel_element {                        // Zero-expression list element
+    expression  *e_ptr;                     // Pointer to expression
+    zel_element *next;                      // Next or nullpter
+};
+
+struct param_iterator {                     // A parameter iterator
+    zel_element *zel_ptr;                   // stuff that needs to be aeroed
+    parameter   *param_ptr;                 // Pointer to the parameter
 };
 
 class parameter {
@@ -132,6 +151,8 @@ class parameter {
     
     parameter      *next;                   // List pointer
     static parameter *root;                 // Anchor
+    static unsigned nesting_level;          // How many iterator type parameters are nested
+    static param_iterator iterator[max_param_iterators]; // Note: innermost loop is at level 0
     
     void         i_reset() {step_cntr = 0;};    // Duh!
     int          i_next(); 
@@ -145,11 +166,14 @@ public:
     
     static void reset();                    // Go back to initial state
     static int  advance();                  // Advance to next value combination, returns != 0 when exhausted
+    
     static void list_names(FILE *fp);       // adds names to file (preceeded by space, followed by nothing)
     static void list_c_val(FILE *fp);       // list the current values, like above
 
     static parameter *find_parameter(const char *nm);   // find parameter by its name (symbol)
     double      get_cur_value();
+    
+    static void enqueue_zero_op(expression *e_ptr); // Summation op to be zeroed
 };
 
 struct spe_text {                           // Spice element: Text

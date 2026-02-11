@@ -30,7 +30,9 @@ nodes_of_interest* nodes_of_interest::root = nullptr; // Root of the NOI list
 unsigned nodes_of_interest::n_noi = 0;      // Counts the number of NOI's
 
 parameter* parameter::root = nullptr;       // start of the parameter list
-
+param_iterator parameter::iterator[max_param_iterators] = {{nullptr, nullptr}}; // mechanism to allow nested loops
+unsigned parameter::nesting_level = 0;      // Nesting level
+ 
 units unit_table[] = {
     {' ', 1.0},                             // Nothing: unity
     {'G', 1.0e9},                           // Giga
@@ -54,6 +56,8 @@ time_series* time_series::root = nullptr;   // Root of the time series
 spice_deck circuit;                         // circuit under test
 
 f1_table func1_tab[] = {                    // Table of functions with one argument
+    {"Sum", nullptr},                       // The summartion function is special and it is
+                                            // implemented in the expression class
     {"sqrt", sqrt},                         // Square root
     {"abs", fabs},                          // Absolute
     {"ln", log},                            // Natural log
@@ -63,9 +67,11 @@ f1_table func1_tab[] = {                    // Table of functions with one argum
 
 f2_table func2_tab[] = {                    // Functions with 2 arguments
     {"peak", locate_peak},
+    {"n_peaks", count_peaks},
     {"t_rise", locate_rise},
     {"t_fall", locate_fall},
     {"t_edge", locate_edge},
+    {"n_edges", count_edges},
     {nullptr, nullptr}
 };
     
@@ -162,6 +168,7 @@ expression::expression(double x)
     value = x;
     l_arg = nullptr;
     r_arg = nullptr;
+    t_arg = nullptr;
     func1_ptr = nullptr;
     p_ptr = nullptr;
     func2_ptr = nullptr;
@@ -170,10 +177,11 @@ expression::expression(double x)
 
 expression::expression(double (*f_ptr) (double), expression* arg_ptr)
 {
-    type = function1;
+    type = (f_ptr == nullptr) ? sum_func : function1;
     value = 0.0;
     l_arg = arg_ptr;
     r_arg = nullptr;
+    t_arg = nullptr;
     func1_ptr = f_ptr;
     p_ptr = nullptr;
     func2_ptr = nullptr;
@@ -187,6 +195,7 @@ expression::expression(expression* la_ptr, exp_type et, expression* ra_ptr)
     value = 0.0;
     l_arg = la_ptr;
     r_arg = ra_ptr;
+    t_arg = nullptr;
     func1_ptr = nullptr;    
     p_ptr = nullptr;
     func2_ptr = nullptr;
@@ -199,6 +208,7 @@ expression::expression(parameter* param_ptr)
     value = 0.0;
     l_arg = nullptr;
     r_arg = nullptr;
+    t_arg = nullptr;
     func1_ptr = nullptr;
     p_ptr = param_ptr;
     func2_ptr = nullptr;
@@ -212,17 +222,34 @@ expression::expression(double (*f_ptr) (class nodes_of_interest *n_ptr, double x
     value = 0.0;
     l_arg = arg_ptr;
     r_arg = nullptr;
+    t_arg = nullptr;
     func1_ptr = nullptr;
     p_ptr = nullptr;
     func2_ptr = f_ptr;
     noi_ptr = n_ptr;
 }
 
+expression::expression(expression* tst_ptr, expression* true_arg, expression* false_arg)
+{
+    type = test_select;
+    value = 0.0;
+    l_arg = true_arg;
+    r_arg = false_arg;
+    t_arg = tst_ptr;
+    func1_ptr = nullptr;    
+    p_ptr = nullptr;
+    func2_ptr = nullptr;
+    noi_ptr = nullptr;
+}
 
 double expression::get_value()
 {
     switch (type) {
         case constant:
+            return value;
+            
+        case sum_func:
+            value += l_arg->get_value();
             return value;
             
         case function1:
@@ -245,6 +272,9 @@ double expression::get_value()
             
         case division:
             return l_arg->get_value() / r_arg->get_value();
+            
+        case test_select:
+            return (t_arg->get_value() > 0.0) ? l_arg->get_value() : r_arg->get_value();
             
         default: assert(0);
     }
@@ -322,13 +352,16 @@ int parameter::advance()
 // Advance the parameter values. Returns 1 when all combinations are done, 0 otherwise
 //
 {
-    for (parameter *p_ptr = root; p_ptr != nullptr; p_ptr = p_ptr->next) {
-        if (p_ptr->type != scan)
-            continue;
-        if (p_ptr->i_next() == 0)
+    for (unsigned level = 0; level < nesting_level; level++) {
+
+        if (iterator[level].param_ptr->i_next() == 0)
             return 0;
+
+        // Level <level> completed. Need to zero any sums over this level:
+        for (zel_element *z_ptr = iterator[level].zel_ptr; z_ptr != nullptr; z_ptr = z_ptr->next)
+            z_ptr->e_ptr->zero_sum();
     }
-    
+
     return 1;
 }
 
@@ -350,6 +383,8 @@ parameter::parameter(char* nm, double v_min, double v_max, unsigned n)
     step_cntr = 0;
     if (n <= 1) d_value = 1.0;          // Does not matter, never used (only 1 step)
     else        d_value = (v_max - v_min) / (double) (n - 1);
+    
+    iterator[nesting_level++].param_ptr = this;  // This parameter is a looping one
 }
 
 parameter::parameter(char* nm, class expression* expr_ptr)
@@ -371,7 +406,7 @@ parameter::parameter(char* nm, class expression* expr_ptr)
     root = this;
 }
 
-parameter * parameter::find_parameter(const char* nm)
+parameter *parameter::find_parameter(const char* nm)
 {
     parameter *pptr = root;
     while (pptr != nullptr) {
@@ -381,6 +416,15 @@ parameter * parameter::find_parameter(const char* nm)
     }
     return nullptr;
 }
+
+void parameter::enqueue_zero_op(expression* expr_ptr)
+{
+    zel_element *z_ptr = new zel_element;
+    z_ptr->e_ptr = expr_ptr;
+    z_ptr-> next = iterator[nesting_level].zel_ptr;
+    iterator[nesting_level].zel_ptr = z_ptr;
+}
+
 
 /////////
 
@@ -656,26 +700,26 @@ double time_series::edge_search(unsigned int from, unsigned int to, double min_c
     //
     unsigned win_bgn = e_pos;             // The first datum index within the current window
     unsigned win_end = e_pos + 1;         // The last datum index within the current window
+    val_bgn = data[win_bgn];
+    val_end = data[win_end];
     
     while (((win_bgn - 1) >= from) && ((win_end + 1) < to)) {  // The window extension loop
-        val_bgn = data[win_bgn];
-        val_end = data[win_end];
-        threshold = 0.5 * (val_bgn + val_end); // updated THR = 1/2 way between endpoints
-        
-        // The new threshold may require e_pos to move
-        if ((data[e_pos + 1] <  threshold) == is_rising) e_pos++;
-        if ((data[e_pos    ] >= threshold) == is_rising) e_pos--;
-        
-        // Decide which way to extend the window
-        if ((e_pos - win_bgn) > (win_end - (e_pos + 1))) {
-            // Extend towards the beginning
-            if ((data[win_bgn - 1] < val_bgn) == is_rising) win_bgn--;
-            else break; // Window cannot be extend while preserving monotonicity
+        double d_bgn = val_bgn - data[win_bgn - 1];
+        double d_end = data[win_end + 1] - val_end;
+        if ( ((d_bgn < 0) == is_rising) ||          // end of monotonicity reached ?
+             ((d_end < 0) == is_rising)    ) break; // Yes!
+
+        // extend along the steepest gradient first
+        if (fabs(d_bgn) > fabs(d_end)) {
+            win_bgn--;
+            val_bgn = data[win_bgn];
         } else {
-            // extend towards the end
-            if ((data[win_end + 1] > val_end) == is_rising) win_end++;
-            else break; // Window cannot be extend while preserving monotonicity   
+            win_end++;
+            val_end = data[win_end];
         }
+        
+        if (fabs(val_bgn - val_end) > edge_search_slope_frac * min_chg)
+            break;                       // Done: once enough slope is covered
     }
       
     //
@@ -692,6 +736,8 @@ double time_series::edge_search(unsigned int from, unsigned int to, double min_c
         assert(ec == 0);
         
         for (unsigned i = win_bgn; i <= win_end; i++) {     // add the data points
+            // Note: the dependent variable is time: x=Phase, y=time (or data index)
+            //       this rotation of the coordinate system results in a better fit of a 3rd order polynomial
             ec = add_lsq_fit  (lsq_fit_sys_ptr, &(data[i]), (double) i);
             assert(ec == 0);
         }
@@ -708,7 +754,7 @@ double time_series::edge_search(unsigned int from, unsigned int to, double min_c
                 edge_time = sim_time(edge_pos);
             }
         }
-        {
+        if (0) { // Debugging aid, remove once deemed stable: this data is nice to verify the fit
             FILE *of = fopen("q.dat", "w");
             assert(of);
             double dy = (data[win_end] - data[win_bgn]) / 200.0;
@@ -983,8 +1029,14 @@ void *define_function1(char *name, void *x)
 // Produce a void * define_function1(char* name, void* x)
 {
     for (unsigned i = 0; func1_tab[i].name != nullptr; i++)
-        if (!strcmp(name, func1_tab[i].name))
-            return new expression(func1_tab[i].func1_ptr, (expression *) x);
+        if (!strcmp(name, func1_tab[i].name)) {
+            expression *ep = new expression(func1_tab[i].func1_ptr, (expression *) x);
+            if (func1_tab[i].func1_ptr == nullptr)
+                // This is a Sum-operation, that needs to be zero-ed if the current
+                // parameter looping level completes
+                parameter::enqueue_zero_op(ep);
+            return ep;
+        }
     fprintf(stderr, "Line %d: undefined function '%s'\n", yylineno, name);
     yy_n_parse_err += 1;
     return nullptr;
@@ -1009,6 +1061,12 @@ void *define_function2(char *name, char *ts_name, void *y)
     }
 
     return new expression(f_ptr, n_ptr, (expression *) y);
+}
+
+void *define_test_sel(void *t, void *a, void *b)
+// This defines the usual C-stype conditional expression (test) ? a : b
+{
+    return new expression((expression *) t, (expression *) a, (expression *) b);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1037,18 +1095,50 @@ double locate_peak(nodes_of_interest *noi_ptr, double x)
     unsigned imax = ts_ptr->get_n() - 1;
     do {
         unsigned next;
-        double ip = ts_ptr->peak_search(i, imax, threshold_frac * ts_ptr->get_max(),
+        double tp = ts_ptr->peak_search(i, imax, threshold_frac * ts_ptr->get_max(),
                                         threshold_hyst * ts_ptr->get_max(), next);
-        if (ip < 0)
+        if (tp < 0)
             return NAN;                 // Fail: no peak found
         
         if (n_peak == 0)
-            return sim_time(ip);        // Success: that is the desired peak
+            return tp;        // Success: that is the desired peak
 
         n_peak--;                       // Not this one ...
         i = next;
         
     } while (1);
+}
+
+double count_peaks(nodes_of_interest *noi_ptr, double x)
+//
+// The node of interest is expected to be a voltage time series and this fuction counts the number
+// of peaks.
+//
+// The argment <x> isn't used for now. May be used to supply threshold fractions later
+//
+{
+    unsigned n_peaks = 0;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < max_ts));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+    
+    unsigned i = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        double tp = ts_ptr->peak_search(i, imax, threshold_frac * ts_ptr->get_max(),
+                                        threshold_hyst * ts_ptr->get_max(), next);
+        if (tp < 0)
+            return (double) n_peaks;     // Fail: no more peaks
+
+        n_peaks++;                       // Got one
+        i = next;
+        
+    } while (1);
+    
+    return NAN;                         // Should not get here
 }
 
 double locate_rise(nodes_of_interest *noi_ptr, double x)
@@ -1162,6 +1252,38 @@ double locate_edge(nodes_of_interest *noi_ptr, double x)
     return NAN;
 }
 
+double count_edges(nodes_of_interest *noi_ptr, double x)
+// Counts the number of edges (regardless of direction)
+//
+// <x> isn't used now, but may be used later to supply edge search parameters
+{
+    unsigned n_edges = 0;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < max_ts));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+   
+    unsigned imin = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        unsigned edge_type;
+        double tx = ts_ptr->edge_search(imin, imax, edge_search_min_chg * 2.0 * M_PI, edge_search_t_win,
+                                        edge_type, next);
+        // Note: it is possible to save some time by writing a simpler edge finder that doesn't bother
+        //       with fitting, interpolating and timing...
+        
+        if (tx < 0.0)
+            return (double) n_edges;    // Done: no more edges
+        imin = next;                    // Prepare next sarch
+
+        n_edges++;                      // Got one more edge
+        
+    } while (1);   
+    
+    return NAN;                         // unreachable
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
