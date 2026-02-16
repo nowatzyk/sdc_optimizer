@@ -36,6 +36,8 @@
                     
 <IN_PRAGMA>"scan"    { return SCAN; }
 
+<IN_PRAGMA>"sim_anneal" { return SIM_ANNEAL; }
+
 <IN_PRAGMA>"parameter" { return PARAMETER; }
 
 <IN_PRAGMA>"monitor" { return MONITOR; }

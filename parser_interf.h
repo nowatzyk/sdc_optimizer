@@ -28,6 +28,7 @@ void add_subst_to_spice_deck(char *p_name);
 void add_new_line_to_spice_deck();
 void define_tran(double t_incr, double t_stop, double t_start, double dT_max);
 void define_param_scan(char *name, double v_start, double v_stop, double n_steps);
+void define_sim_anneal(char *name, double v_min, double v_init, double v_max);
 void define_monitor(char *name);
 
 void define_para_expression(char *name, void *expr);

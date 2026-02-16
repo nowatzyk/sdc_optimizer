@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <vector>
+using namespace std;
 
 extern "C" {
 #include "parser.h"                         // Bison generated headers (in build dir)
@@ -17,11 +19,13 @@ extern "C" {
 #include "fit_functions.h"
 }
 
+#include "xrand.h"
 #include "csv_analyzer.h"
+#include "parameter.h"
 
 const char* csv_out_path = "/tmp/JoSim2csv_analyzer.csv";      // Output fifo from Josim to this program
 const char* cir_inp_path = "/tmp/JoSim2csv_analyzer.cir";      // Input fifo to Josim
-
+const char* EVAL_PARAMETER = "eval";
 
 ////////////////////////////////////////////////////////////////////
 //
@@ -34,7 +38,43 @@ unsigned nodes_of_interest::n_noi = 0;      // Counts the number of NOI's
 parameter* parameter::root = nullptr;       // start of the parameter list
 param_iterator parameter::iterator[max_param_iterators] = {{nullptr, nullptr}}; // mechanism to allow nested loops
 unsigned parameter::nesting_level = 0;      // Nesting level
- 
+vector<parameter *> parameter::p_ptr;       // Paramters subject to optimizations via simulated annealing
+unsigned parameter::changed_flag = 0;       // Part 
+parameter* parameter::changed_param = nullptr; // of
+double parameter::changed_value = 0.0;      //     the
+parameter* parameter::eval_ptr = nullptr;   //      Simulated
+unsigned parameter::enable_sim_anneal = 0;  //       annealing
+unsigned parameter::have_best = 0;          //        machinery
+
+//
+// The working variables of the simulated annealing function
+//
+// Note: in the original code, the optimize functuncion was driving and was calling
+//       an evaluation function that did the work. Here, the system operates in reverse:
+//       a simulation framework uses a given configuration, simulates it, and the analyzes
+//       the result. It may do this many times and compute an aggrgate evaluation over
+//       multiple individual simulations. The the optimize is called to change the configuration.
+//       rise and repeat. Net result is that all variables used internal to the optimizer, need
+//       to be decared and initialized here.
+//
+double parameter::t0 = 0.0;
+double parameter::t1 = 0.0;
+double parameter::dt = 0.0;
+double parameter::old_eval = __DBL_MAX__;   // Note: the evaluation is being minimized
+double parameter::new_eval = __DBL_MAX__;   //       smaller values are better
+double parameter::min_eval = __DBL_MAX__;
+unsigned parameter::n_sim_anneal = 0;
+int parameter::n_rej = 0;
+int parameter::t_max = MAX_RESET;
+double parameter::d_scale = 0.25;
+unsigned parameter::out_cnt = 0;
+unsigned parameter::cur_sched = 0;
+unsigned parameter::sched_stp_cntr = 0;
+vector<an_sched> parameter::as;
+FILE* parameter::sa_log = nullptr;
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 units unit_table[] = {
     {' ', 1.0},                             // Nothing: unity
     {'G', 1.0e9},                           // Giga
@@ -299,158 +339,6 @@ double expression::get_value()
             
         default: assert(0);
     }
-}
-
-
-//////
-
-double parameter::get_cur_value()
-{
-    switch (type) {
-        case scan:
-            return (min_value + (double) step_cntr * d_value);
-            
-        case assignment:
-            return expr->get_value();
-            
-        default:
-            assert (0);
-    }
-}
-
-
-int parameter::i_next()
-{
-    step_cntr++;
-    
-    if (step_cntr >= n_steps) {
-        step_cntr = 0;
-        return 1;
-    } 
-    
-    return 0;
-}
-
-void parameter::print_name(FILE* fp)
-{
-    fprintf(fp, " %s", name);
-}
-
-void parameter::print_value(FILE* fp)
-{
-    fprintf(fp, " %.15lg", get_cur_value());
-}
-
-void parameter::reset()
-{
-    parameter *p_ptr = root;
-    while(p_ptr != nullptr) {
-        p_ptr->i_reset();
-        p_ptr = p_ptr->next;
-    }
-}
-
-void parameter::list_names(FILE* fp)
-{
-    parameter *p_ptr = root;
-    while(p_ptr != nullptr) {
-        p_ptr->print_name(fp);
-        p_ptr = p_ptr->next;
-    }
-}
-
-void parameter::list_c_val(FILE* fp)
-{
-    parameter *p_ptr = root;
-    while(p_ptr != nullptr) {
-        p_ptr->print_value(fp);
-        p_ptr = p_ptr->next;
-    }
-}
-
-int parameter::advance(unsigned &lvl)
-//
-// Advance the parameter values. Returns 1 when all combinations are done, 0 otherwise
-//
-// <lvl> is set to highest nesting level that was advanced. This is used in the summary report
-// so that a plot function can use this info to only use data points that are a function of
-// the innermost loop(s) having been completed.
-//
-{
-    for (unsigned level = 0; level < nesting_level; level++) {
-
-        if (iterator[level].param_ptr->i_next() == 0) {
-            lvl = level;
-            return 0;
-        }
-        
-        // Level <level> completed. Need to zero any sums over this level:
-        for (zel_element *z_ptr = iterator[level].zel_ptr; z_ptr != nullptr; z_ptr = z_ptr->next)
-            z_ptr->e_ptr->zero_sum();
-    }
-
-    lvl = nesting_level - 1;
-    return 1;
-}
-
-parameter::parameter(char* nm, double v_min, double v_max, unsigned n)
-// Constructor for a scan-type parameter
-{ 
-    type = scan;            //This is a scan type parameter
-    
-    name = nm;
-    min_value = v_min;
-    max_value = v_max;
-    n_steps = n;
-    
-    expr = nullptr;
-    
-    next = root;
-    root = this;
-    
-    step_cntr = 0;
-    if (n <= 1) d_value = 1.0;          // Does not matter, never used (only 1 step)
-    else        d_value = (v_max - v_min) / (double) (n - 1);
-    
-    iterator[nesting_level++].param_ptr = this;  // This parameter is a looping one
-}
-
-parameter::parameter(char* nm, class expression* expr_ptr)
-// assignment type parameter
-{
-    type = assignment;
-    
-    name = nm;
-
-    min_value = 0.0;        // does not matter...
-    max_value = 1.0;
-    n_steps = 0;
-    step_cntr = 0;
-    d_value = 1.0;
-    
-    expr = expr_ptr;        // This is the only thing that matters!
-    
-    next = root;
-    root = this;
-}
-
-parameter *parameter::find_parameter(const char* nm)
-{
-    parameter *pptr = root;
-    while (pptr != nullptr) {
-        if (!strcmp(nm, pptr->name))
-            return pptr;
-        pptr = pptr->next;
-    }
-    return nullptr;
-}
-
-void parameter::enqueue_zero_op(expression* expr_ptr)
-{
-    zel_element *z_ptr = new zel_element;
-    z_ptr->e_ptr = expr_ptr;
-    z_ptr-> next = iterator[nesting_level].zel_ptr;
-    iterator[nesting_level].zel_ptr = z_ptr;
 }
 
 
@@ -979,6 +867,30 @@ void define_param_scan(char *name, double v_start, double v_stop, double n_steps
     new parameter(name, v_start, v_stop, n);
 }
 
+void define_sim_anneal(char *name, double v_min, double v_init, double v_max)
+{
+    if (nullptr != parameter::find_parameter(name)) {
+        fprintf(stderr, "Line %d; Duplicate parameter definition for '%s'\n", yylineno, name);
+        yy_n_parse_err += 1;
+        return;
+    };
+    
+    if ((v_min >= v_init) || (v_init >= v_max)) {
+        fprintf(stderr, "Line %d; v_min < v_init < v_max not true\n", yylineno);
+        yy_n_parse_err += 1;
+        return;
+    }
+    
+    parameter *eval_ptr = parameter::find_parameter(EVAL_PARAMETER);
+    if (nullptr == eval_ptr) {
+        fprintf(stderr, "Line %d; the parameter '%s' must be defined first\n", yylineno, EVAL_PARAMETER);
+        yy_n_parse_err += 1;
+        return;
+    }
+    
+    new parameter(name, v_min, v_init, v_max, eval_ptr);
+}
+
 void define_monitor(char *name)
 {
     nodes_of_interest *n_ptr = nodes_of_interest::find(name);
@@ -1356,7 +1268,7 @@ double count_edges(nodes_of_interest *noi_ptr, double x)
 //
 
 int main(int argc, char *argv[])
-{
+{    
     // Create the named pipes (FIFO) (unless already present)
     if ((access(csv_out_path, F_OK) != 0) && (mkfifo(csv_out_path, 0666) == -1)) {
         perror("mkfifo failed");
@@ -1368,14 +1280,28 @@ int main(int argc, char *argv[])
         exit(1);
     }
     
-    if (argc != 2) {
-        fprintf(stderr, "csv_analyzer <spice source file>\n");
+    if ((argc < 2) || (argc > 4)) {
+        fprintf(stderr, "csv_analyzer <spice source file> [<sa_schedule> [<sa_log_file>]]\n");
         exit(1);
     }
     
     if (1 > circuit.read_cir_file(argv[1])) {
         fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
         exit(1);
+    }
+    
+    if (argc >= 3) {
+        if (parameter::read_sa_schedule(argv[2])) {
+            fprintf(stderr, "Failed to read simulated annealing schedule\n");
+            exit(1);
+        }
+    }
+    
+    if (argc > 3) {
+        if (parameter::open_sa_log_file(argv[3])) {
+            fprintf(stderr, "Failed to open log file for simulated annealing\n");
+            exit(1);
+        }
     }
         
     FILE *sum_fp = fopen("Summary.dat", "w");

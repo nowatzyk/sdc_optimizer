@@ -128,60 +128,6 @@ public:
     void        zero_sum() {assert(type == sum_func); value = 0.0;}   // Should only be used on sums
 };
 
-struct zel_element {                        // Zero-expression list element
-    expression  *e_ptr;                     // Pointer to expression
-    zel_element *next;                      // Next or nullpter
-};
-
-struct param_iterator {                     // A parameter iterator
-    zel_element *zel_ptr;                   // stuff that needs to be aeroed
-    parameter   *param_ptr;                 // Pointer to the parameter
-};
-
-class parameter {
-    char        *name;
-    enum {scan, assignment, bin_search, sim_anneal} type;   // Parameter type
-                                            
-    //
-    // Variables used by the scan function:
-    //
-    double      min_value, max_value;       // Range of values to step through
-    unsigned    n_steps;                    // #of n_steps
-    double      d_value;                    // Step size
-    unsigned    step_cntr;                  // Step counter
-    
-    //
-    // assignment type parameter
-    //
-    expression  *expr;                      // Pointer to expression
-    
-    parameter      *next;                   // List pointer
-    static parameter *root;                 // Anchor
-    static unsigned nesting_level;          // How many iterator type parameters are nested
-    static param_iterator iterator[max_param_iterators]; // Note: innermost loop is at level 0
-    
-    void         i_reset() {step_cntr = 0;};    // Duh!
-    int          i_next(); 
-
-    void         print_name(FILE *fp);
-    void         print_value(FILE *fp);
-    
-public:
-    parameter(char *nm, double v_min, double v_max, unsigned );   // Creates a scan-type parameter
-    parameter(char *nm, class expression *expr); // creates an assignment type parameter
-    
-    static void reset();                    // Go back to initial state
-    static int  advance(unsigned &level);   // Advance to next value combination, returns != 0 when exhausted
-    
-    static void list_names(FILE *fp);       // adds names to file (preceeded by space, followed by nothing)
-    static void list_c_val(FILE *fp);       // list the current values, like above
-
-    static parameter *find_parameter(const char *nm);   // find parameter by its name (symbol)
-    double      get_cur_value();
-    
-    static void enqueue_zero_op(expression *e_ptr); // Summation op to be zeroed
-};
-
 struct spe_text {                           // Spice element: Text
     char        *text;                      // Pointer to the 0-termninated text (belt&suspenders...)
 };

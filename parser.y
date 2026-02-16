@@ -22,7 +22,7 @@ int yylex(void);
 %token <val> NUMBER
 %type <pointer> expr terminal
 %token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER OPAR CPAR ASSIGN COMMA TEST_OP OTHERWISE
-%token COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
+%token COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE SIM_ANNEAL
 
 %left PLUS MINUS
 %left MULT DIVIDE
@@ -48,6 +48,7 @@ line:
 pragma_body:
         PARAMETER SYMBOL SCAN NUMBER NUMBER NUMBER  { define_param_scan($2, $4, $5, $6);}
     |   PARAMETER SYMBOL ASSIGN expr        { define_para_expression($2, $4); }
+    |   PARAMETER SYMBOL SIM_ANNEAL NUMBER NUMBER NUMBER  { define_sim_anneal($2, $4, $5, $6);}
     |   MONITOR SYMBOL                      { define_monitor($2);}
     ;
     

@@ -24,6 +24,8 @@ add_executable(csv_analyzer
     main.cpp
     lsq_fit.c
     fit_functions.c
+    xrand.cpp
+    parameter.cpp
     ${BISON_pragma_parser_OUTPUTS}
     ${FLEX_pragma_lexer_OUTPUTS}
 )
