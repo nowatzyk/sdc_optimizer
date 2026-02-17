@@ -21,11 +21,14 @@ int yylex(void);
 %token <text> END LINE SYMBOL PSUBSTITUTION
 %token <val> NUMBER
 %type <pointer> expr terminal
-%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER OPAR CPAR ASSIGN COMMA TEST_OP OTHERWISE
-%token COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE SIM_ANNEAL
+%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER ASSIGN COMMA
+%token SIM_ANNEAL
 
+%left TEST_OP OTHERWISE
+%left COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
 %left PLUS MINUS
 %left MULT DIVIDE
+%left OPAR CPAR
 
 %%
 input:
@@ -54,16 +57,16 @@ pragma_body:
     
 expr:
         terminal                            { $$ = $1; }
-    |   expr PLUS terminal                  { $$ = define_add($1, $3); }
-    |   expr MINUS terminal                 { $$ = define_sub($1, $3); }
-    |   expr MULT terminal                  { $$ = define_mul($1, $3); }
-    |   expr DIVIDE terminal                { $$ = define_div($1, $3); }
-    |   expr COMP_EQ terminal               { $$ = define_eq($1, $3); }
-    |   expr COMP_NE terminal               { $$ = define_ne($1, $3); }
-    |   expr COMP_GT terminal               { $$ = define_gt($1, $3); }
-    |   expr COMP_GE terminal               { $$ = define_ge($1, $3); }
-    |   expr COMP_LT terminal               { $$ = define_lt($1, $3); }
-    |   expr COMP_LE terminal               { $$ = define_le($1, $3); }
+    |   expr PLUS expr                      { $$ = define_add($1, $3); }
+    |   expr MINUS expr                     { $$ = define_sub($1, $3); }
+    |   expr MULT expr                      { $$ = define_mul($1, $3); }
+    |   expr DIVIDE expr                    { $$ = define_div($1, $3); }
+    |   expr COMP_EQ expr                   { $$ = define_eq($1, $3); }
+    |   expr COMP_NE expr                   { $$ = define_ne($1, $3); }
+    |   expr COMP_GT expr                   { $$ = define_gt($1, $3); }
+    |   expr COMP_GE expr                   { $$ = define_ge($1, $3); }
+    |   expr COMP_LT expr                   { $$ = define_lt($1, $3); }
+    |   expr COMP_LE expr                   { $$ = define_le($1, $3); }
     |   OPAR expr CPAR                      { $$ = $2; }
     |   expr TEST_OP expr OTHERWISE expr    { $$ = define_test_sel($1, $3, $5); }
     ;

@@ -114,6 +114,8 @@ class expression {
     nodes_of_interest *noi_ptr;             // NOI pointer
     // Note: TBD save some space and make this a union
     
+    static vector<expression*> sum_expressions; // The expressions computing a sum    
+
 public:
     expression  (double x);                 // creates a constant expression
     expression  (double (*f_ptr)(double x), expression *arg_ptr);   // creates a function expression with 1 arg 
@@ -125,7 +127,8 @@ public:
     expression  (expression *test_ptr, expression *true_arg, expression *false_arg);
     
     double      get_value();                // Returns the current value of this expression
-    void        zero_sum() {assert(type == sum_func); value = 0.0;}   // Should only be used on sums
+    void zero_sum() {assert(type == sum_func); value = 0.0;};
+    static void update_sums();              // Updates all sums
 };
 
 struct spe_text {                           // Spice element: Text

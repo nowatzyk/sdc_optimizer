@@ -121,7 +121,8 @@ public:
     static void reset();                    // Go back to initial state
     static int  advance(unsigned &level);   // Advance to next value combination, returns != 0 when exhausted
     
-    static void list_names(FILE *fp);       // adds names to file (preceeded by space, followed by nothing)
+    static unsigned list_names(FILE *fp);   // adds names to file (preceeded by space, followed by nothing)
+                                            // returns number of names listed
     static void list_c_val(FILE *fp);       // list the current values, like above
 
     static parameter *find_parameter(const char *nm);   // find parameter by its name (symbol)

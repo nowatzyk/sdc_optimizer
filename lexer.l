@@ -19,7 +19,7 @@
 
 <*>\n                { BEGIN(INITIAL); return EOL; }
 
-<IN_PRAGMA>[-]?[0-9.eE]+[GMKmunpLOT]? { double val;
+<IN_PRAGMA>[-]?[0-9.]+[eE]?[-]?[0-9]*[GMKmunpLOT]? { double val;
                         if (1 != sscanf(yytext, "%lf", &val)) {
                             fprintf(stderr, "Bad number in circuit file on line %i\n", yylineno);
                             val = NAN;

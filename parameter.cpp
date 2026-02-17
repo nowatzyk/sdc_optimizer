@@ -46,19 +46,26 @@ extern "C" {
 
 double parameter::get_cur_value()
 {
+    double rtn = NAN;
+    
     switch (type) {
         case scan:
-            return (min_value + (double) step_cntr * d_value);
+            rtn = (min_value + (double) step_cntr * d_value);
+            break;
             
         case assignment:
-            return expr->get_value();
+            rtn =  expr->get_value();
+            break;
             
         case sim_anneal:
-            return cur_value;
+            rtn = cur_value;
+            break;
             
         default:
             assert (0);
     }
+    
+    return rtn;
 }
 
 
@@ -85,7 +92,7 @@ int parameter::i_next()
 
 void parameter::print_name(FILE* fp)
 {
-    fprintf(fp, " %s", name);
+    fprintf(fp, "%s", name);
 }
 
 void parameter::print_value(FILE* fp)
@@ -102,13 +109,17 @@ void parameter::reset()
     }
 }
 
-void parameter::list_names(FILE* fp)
+unsigned parameter::list_names(FILE* fp)
 {
     parameter *p_ptr = root;
+    unsigned cnt = 1;
     while(p_ptr != nullptr) {
+        fprintf(fp, " (%u):", cnt++);
         p_ptr->print_name(fp);
         p_ptr = p_ptr->next;
     }
+    
+    return cnt;
 }
 
 void parameter::list_c_val(FILE* fp)
@@ -162,6 +173,12 @@ int parameter::advance(unsigned &lvl)
             return 0;
         }
         
+        if (enable_sim_anneal) {
+            // Save the evaluation, which might depend on sums that are about to be zero-ed
+            assert(eval_ptr != nullptr);
+            new_eval = eval_ptr->get_cur_value();
+        }
+        
         // Level <level> completed. Need to zero any sums over this level:
         for (zel_element *z_ptr = iterator[level].zel_ptr; z_ptr != nullptr; z_ptr = z_ptr->next)
             z_ptr->e_ptr->zero_sum();
@@ -176,6 +193,10 @@ parameter::parameter(char* nm, double v_min, double v_max, unsigned n)
 {
     default_init(nm);
     type = scan;                        //This is a scan type parameter
+    
+     min_value = v_min;
+     max_value = v_max;
+     n_steps = n;
     
     if (enable_sim_anneal == 1) {
         fprintf(stderr, "Line %d: Can't iterate over simulated annealing\n", yylineno);
@@ -273,14 +294,13 @@ void parameter::restore_best()
 
 unsigned parameter::sim_anneal_cycle()
 {
-    double current_evaluation = eval_ptr->get_cur_value();
     if (n_sim_anneal == 0) {
         //
         // First time
         //
-        min_eval = current_evaluation;
+        min_eval = new_eval;
         save_best();
-        old_eval = current_evaluation;
+        old_eval = new_eval;
     }
     
     if (sched_stp_cntr >= as[cur_sched].n_steps)  {
@@ -311,8 +331,7 @@ unsigned parameter::sim_anneal_cycle()
         unsigned skip_anneal = 0;               // ... to avoid spagetti code
         
         // A change had been made, now decide if it  kept:
-        new_eval = current_evaluation;
-        
+
         //
         // Check score
         //
@@ -407,7 +426,7 @@ unsigned parameter::read_sa_schedule(char *file_name)
 
 	while(fgets(buf, 120, asf)) {
 
-		if (buf[0] == '#' || buf[0] == '\n' || buf[0] == 0)
+		if (buf[0] == '#' || buf[0] == '\n' || buf[0] == 0 || buf[0] == '\r')
 			continue;							// skip comments or white lines
 
 	    if (2 != sscanf(buf, "%lf%d", &(t.temp), &(t.n_steps)) ||
@@ -471,6 +490,12 @@ void parameter::change_param(double c_range)
             double v_new = d_min + d * (d_max - d_min);
             assert(v_new >= changed_param->min_value && v_new <= changed_param->max_value);
             changed_param->cur_value = v_new;       // Perform the change
+            
+            // The two loops here were part of the reject mechanism that would allow
+            // a change to be rejected on some other grounds. I left them here to ease 
+            // added the reject mechanism later on. Meanwhile it does not make sense
+            // and the compiler will optimize them away...
+            return; 
         }
 
         changed_param->cur_value = changed_value;   // Unchange this one, before trying another!

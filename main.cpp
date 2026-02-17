@@ -34,6 +34,7 @@ const char* EVAL_PARAMETER = "eval";
 
 nodes_of_interest* nodes_of_interest::root = nullptr; // Root of the NOI list
 unsigned nodes_of_interest::n_noi = 0;      // Counts the number of NOI's
+vector<expression*> expression::sum_expressions;    // Needed to track summations
 
 parameter* parameter::root = nullptr;       // start of the parameter list
 param_iterator parameter::iterator[max_param_iterators] = {{nullptr, nullptr}}; // mechanism to allow nested loops
@@ -219,7 +220,12 @@ expression::expression(double x)
 
 expression::expression(double (*f_ptr) (double), expression* arg_ptr)
 {
-    type = (f_ptr == nullptr) ? sum_func : function1;
+    if (f_ptr == nullptr) {
+        // This is a SUM expression: it has state (unlike all other expressions)
+        type = sum_func;
+        sum_expressions.push_back(this);
+    } else
+        type = function1;
     value = 0.0;
     l_arg = arg_ptr;
     r_arg = nullptr;
@@ -287,58 +293,87 @@ expression::expression(expression* tst_ptr, expression* true_arg, expression* fa
 
 double expression::get_value()
 {
+    double rtn = NAN;
+    
     switch (type) {
         case constant:
-            return value;
-            
         case sum_func:
-            value += l_arg->get_value();        // Note: this one is different - it has a side-effect
-            return value;
+            rtn = value;
+            break;
             
         case function1:
-            return func1_ptr(l_arg->get_value());
+            rtn = func1_ptr(l_arg->get_value());
+            break;
             
         case function2:
-            return func2_ptr(noi_ptr, l_arg->get_value());
+            rtn = func2_ptr(noi_ptr, l_arg->get_value());
+            break;
             
         case p_reference:
-            return p_ptr->get_cur_value();
+            rtn = p_ptr->get_cur_value();
+            break;
             
         case addition:
-            return l_arg->get_value() + r_arg->get_value();
+            rtn = l_arg->get_value() + r_arg->get_value();
+            break;
             
         case subtraction:
-            return l_arg->get_value() - r_arg->get_value();
+            rtn = l_arg->get_value() - r_arg->get_value();
+            break;
              
         case multiplication:
-            return l_arg->get_value() * r_arg->get_value();
+            rtn = l_arg->get_value() * r_arg->get_value();
+            break;
             
         case division:
-            return l_arg->get_value() / r_arg->get_value();
+            rtn = l_arg->get_value() / r_arg->get_value();
+            break;
             
         case test_select:
-            return (t_arg->get_value() > 0.0) ? l_arg->get_value() : r_arg->get_value();
+            rtn = (t_arg->get_value() > 0.0) ? l_arg->get_value() : r_arg->get_value();
+            break;
             
         case comp_eq:
-            return (l_arg->get_value() == r_arg->get_value()) ? 1.0 : 0.0;
+            rtn = (l_arg->get_value() == r_arg->get_value()) ? 1.0 : 0.0;
+            break;
             
         case comp_ne:
-            return (l_arg->get_value() != r_arg->get_value()) ? 1.0 : 0.0;
+            rtn = (l_arg->get_value() != r_arg->get_value()) ? 1.0 : 0.0;
+            break;
             
         case comp_gt:
-            return (l_arg->get_value() > r_arg->get_value()) ? 1.0 : 0.0;
+            rtn = (l_arg->get_value() > r_arg->get_value()) ? 1.0 : 0.0;
+            break;
             
         case comp_ge:
-            return (l_arg->get_value() >= r_arg->get_value()) ? 1.0 : 0.0;
+            rtn = (l_arg->get_value() >= r_arg->get_value()) ? 1.0 : 0.0;
+            break;
             
         case comp_lt:
-            return (l_arg->get_value() < r_arg->get_value()) ? 1.0 : 0.0;
+            rtn = (l_arg->get_value() < r_arg->get_value()) ? 1.0 : 0.0;
+            break;
             
         case comp_le:
-            return (l_arg->get_value() <= r_arg->get_value()) ? 1.0 : 0.0;
+            rtn = (l_arg->get_value() <= r_arg->get_value()) ? 1.0 : 0.0;
+            break;
             
         default: assert(0);
     }
+    
+    return rtn;
+}
+
+void expression::update_sums()
+    // This ought to be called after each simulation run and before any other expressions
+    // are evaluated.
+    //
+    // Things will get ugly, and probably wrong, if the argument to a sum depends on another sum, because
+    // the order in which sums are updated would matter. To do that correctly, would require a full
+    // dependency analysis. Can't be bothered to do that: sum of sums make no sense in this context.
+    //
+{
+    for (unsigned i = 0; i < sum_expressions.size(); i++)
+        sum_expressions[i]->value += sum_expressions[i]->l_arg->get_value();
 }
 
 
@@ -1268,7 +1303,9 @@ double count_edges(nodes_of_interest *noi_ptr, double x)
 //
 
 int main(int argc, char *argv[])
-{    
+{
+    rnd_init(0);
+
     // Create the named pipes (FIFO) (unless already present)
     if ((access(csv_out_path, F_OK) != 0) && (mkfifo(csv_out_path, 0666) == -1)) {
         perror("mkfifo failed");
@@ -1284,12 +1321,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "csv_analyzer <spice source file> [<sa_schedule> [<sa_log_file>]]\n");
         exit(1);
     }
-    
-    if (1 > circuit.read_cir_file(argv[1])) {
-        fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
-        exit(1);
-    }
-    
+   
     if (argc >= 3) {
         if (parameter::read_sa_schedule(argv[2])) {
             fprintf(stderr, "Failed to read simulated annealing schedule\n");
@@ -1303,12 +1335,16 @@ int main(int argc, char *argv[])
             exit(1);
         }
     }
-        
+    
+    if (1 > circuit.read_cir_file(argv[1])) {
+        fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
+        exit(1);
+    }
+         
     FILE *sum_fp = fopen("Summary.dat", "w");
     assert(sum_fp != nullptr);
     fprintf(sum_fp, "#");
-    parameter::list_names(sum_fp);
-    fprintf(sum_fp, " level\n");
+    fprintf(sum_fp, " (%u):level\n", parameter::list_names(sum_fp));
 
     //
     // Initialization and setup done.
@@ -1463,7 +1499,9 @@ int main(int argc, char *argv[])
         waitpid(child_pid, &status, 0);         // reap the child process
     
         if (n_josim_runs == 0) printf("Read %d rows of data, exit status=%d\n", line_no, status);
-    
+
+        expression::update_sums();      // Update all summation expressions (must be done before analysis)
+        
         ///////////////////////////////////////////////////////////////////////////////////////////
         // 3 Analyze the simulation results                                                      // 
         ///////////////////////////////////////////////////////////////////////////////////////////
