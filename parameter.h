@@ -79,6 +79,7 @@ class parameter {
     static parameter *changed_param;        // Which was changed last
     static double	changed_value;          // What was its pre-change value
     static parameter *eval_ptr;             // The evaluation function
+    static parameter *reject_ptr;           // Optional reject function
     
     //
     // The working variables of the simulated annealing optimization function
@@ -113,7 +114,7 @@ class parameter {
 public:
     parameter(char *nm, double v_min, double v_max, unsigned n_steps);   // Creates a scan-type parameter
     
-    parameter(char *nm, double v_min, double v_init, double v_max, parameter *eval_ptr);
+    parameter(char *nm, double v_min, double v_init, double v_max, parameter *eval_ptr, parameter *reject_ptr);
                                             // creates a simulated annealing type
     
     parameter(char *nm, class expression *expr); // creates an assignment type parameter

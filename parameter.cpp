@@ -216,7 +216,7 @@ parameter::parameter(char* nm, double v_min, double v_max, unsigned n)
     iterator[nesting_level++].param_ptr = this;  // This parameter is a looping one
 }
 
-parameter::parameter(char* nm, double v_min, double v_init, double v_max, parameter* ev_ptr)
+parameter::parameter(char* nm, double v_min, double v_init, double v_max, parameter* ev_ptr, parameter *rj_ptr)
 //
 // Enables simulated annealing
 //
@@ -240,6 +240,7 @@ parameter::parameter(char* nm, double v_min, double v_init, double v_max, parame
          // This is the first parameter that sets up the simulated annealing machinery
          //
          eval_ptr = ev_ptr;
+         reject_ptr = rj_ptr;
          iterator[nesting_level++].param_ptr = this;  // This parameter is a looping one
          enable_sim_anneal = 1;
      }
@@ -298,6 +299,10 @@ unsigned parameter::sim_anneal_cycle()
         //
         // First time
         //
+        if (!isnormal(new_eval)) {
+            fprintf(stderr, "Aborting: sim_anneal needs a valid evaluation on the starting configuration\n");
+            exit(1);
+        }
         min_eval = new_eval;
         save_best();
         old_eval = new_eval;
@@ -328,7 +333,7 @@ unsigned parameter::sim_anneal_cycle()
     }
     
     if (n_sim_anneal > 0) {
-        unsigned skip_anneal = 0;               // ... to avoid spagetti code
+        unsigned skip_anneal = 1;               // ... to avoid spagetti code
         
         // A change had been made, now decide if it  kept:
 
@@ -343,21 +348,21 @@ unsigned parameter::sim_anneal_cycle()
             old_eval = new_eval = min_eval;		// restore previous best
             restore_best();
             t_max = MAX_RESET;                  // reset the reset counter
-            skip_anneal = 1;
+            skip_anneal = 0;
         }
 
-        if (skip_anneal == 0) {
+        if (skip_anneal == 1) {
+            unsigned accept_change = isnormal(new_eval); // A change can only be accepted if it resulted into a valid configuration
             double t = (old_eval - new_eval) / old_eval;  // t: relative change (t>0 is better)
-            unsigned accept_change;
             //
             // See if we accept this change
             //
             if (t0 > EPS) {
                 double sigm = 1.0 / (1.0 + exp(-t/t0));// sigmoid function of t*temp
-                double d = rnd_01d();           // d= (0, 1]
-                accept_change = (sigm >= d);
+                double d = rnd_01d();           // d is in (0, 1]
+                accept_change &= (sigm >= d);
             } else
-                accept_change = (t > 0.0);      // once temp is too low, just be greedy
+                accept_change &= (t > 0.0);     // once temperature is too low, just be greedy
 
             if (accept_change) {                // Accept change
                 old_eval = new_eval;
@@ -491,11 +496,9 @@ void parameter::change_param(double c_range)
             assert(v_new >= changed_param->min_value && v_new <= changed_param->max_value);
             changed_param->cur_value = v_new;       // Perform the change
             
-            // The two loops here were part of the reject mechanism that would allow
-            // a change to be rejected on some other grounds. I left them here to ease 
-            // added the reject mechanism later on. Meanwhile it does not make sense
-            // and the compiler will optimize them away...
-            return; 
+            if ((reject_ptr == nullptr) || (reject_ptr->get_cur_value() == 0.0))
+                // We are done IF there is no reject function OR the reject function evaluates to 0 (signaling a good value)
+                return;
         }
 
         changed_param->cur_value = changed_value;   // Unchange this one, before trying another!

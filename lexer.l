@@ -42,6 +42,8 @@
 
 <IN_PRAGMA>"monitor" { return MONITOR; }
 
+<IN_PRAGMA>"snapshot" { return SNAPSHOT; }
+
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     
 <IN_PRAGMA>[a-zA-Z][a-zA-Z0-9_]* { yylval.text = strdup(yytext); return SYMBOL; }

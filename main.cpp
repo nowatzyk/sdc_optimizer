@@ -26,6 +26,7 @@ extern "C" {
 const char* csv_out_path = "/tmp/JoSim2csv_analyzer.csv";      // Output fifo from Josim to this program
 const char* cir_inp_path = "/tmp/JoSim2csv_analyzer.cir";      // Input fifo to Josim
 const char* EVAL_PARAMETER = "eval";
+const char* REJECT_PARAMETER = "reject";                       // Keyword fo a reject functon
 
 ////////////////////////////////////////////////////////////////////
 //
@@ -35,6 +36,10 @@ const char* EVAL_PARAMETER = "eval";
 nodes_of_interest* nodes_of_interest::root = nullptr; // Root of the NOI list
 unsigned nodes_of_interest::n_noi = 0;      // Counts the number of NOI's
 vector<expression*> expression::sum_expressions;    // Needed to track summations
+
+char *snapshot_file_name = nullptr;         // File name for snapshots (if enabled)
+unsigned snapshot_first = 0;
+unsigned snapshot_frequency = 0;
 
 parameter* parameter::root = nullptr;       // start of the parameter list
 param_iterator parameter::iterator[max_param_iterators] = {{nullptr, nullptr}}; // mechanism to allow nested loops
@@ -46,6 +51,7 @@ double parameter::changed_value = 0.0;      //     the
 parameter* parameter::eval_ptr = nullptr;   //      Simulated
 unsigned parameter::enable_sim_anneal = 0;  //       annealing
 unsigned parameter::have_best = 0;          //        machinery
+parameter* parameter::reject_ptr = nullptr; //         ..
 
 //
 // The working variables of the simulated annealing function
@@ -294,6 +300,7 @@ expression::expression(expression* tst_ptr, expression* true_arg, expression* fa
 double expression::get_value()
 {
     double rtn = NAN;
+    double l, r;
     
     switch (type) {
         case constant:
@@ -302,11 +309,13 @@ double expression::get_value()
             break;
             
         case function1:
-            rtn = func1_ptr(l_arg->get_value());
+            l = l_arg->get_value();
+            if (isnormal(l)) rtn = func1_ptr(l);
             break;
             
         case function2:
-            rtn = func2_ptr(noi_ptr, l_arg->get_value());
+            l = l_arg->get_value();
+            if (isnormal(l)) rtn = func2_ptr(noi_ptr, l);
             break;
             
         case p_reference:
@@ -330,31 +339,44 @@ double expression::get_value()
             break;
             
         case test_select:
-            rtn = (t_arg->get_value() > 0.0) ? l_arg->get_value() : r_arg->get_value();
+            l = t_arg->get_value();
+            if (isnormal(l)) rtn = (l > 0.0) ? l_arg->get_value() : r_arg->get_value();
             break;
             
         case comp_eq:
-            rtn = (l_arg->get_value() == r_arg->get_value()) ? 1.0 : 0.0;
+            l = l_arg->get_value();
+            r = r_arg->get_value();
+            if (isnormal(l) && isnormal(r)) rtn = (l == r) ? 1.0 : 0.0;
             break;
             
         case comp_ne:
-            rtn = (l_arg->get_value() != r_arg->get_value()) ? 1.0 : 0.0;
+            l = l_arg->get_value();
+            r = r_arg->get_value();
+            if (isnormal(l) && isnormal(r)) rtn = (l != r) ? 1.0 : 0.0;
             break;
             
         case comp_gt:
-            rtn = (l_arg->get_value() > r_arg->get_value()) ? 1.0 : 0.0;
+            l = l_arg->get_value();
+            r = r_arg->get_value();
+            if (isnormal(l) && isnormal(r)) rtn = (l > r) ? 1.0 : 0.0;
             break;
             
         case comp_ge:
-            rtn = (l_arg->get_value() >= r_arg->get_value()) ? 1.0 : 0.0;
+            l = l_arg->get_value();
+            r = r_arg->get_value();
+            if (isnormal(l) && isnormal(r)) rtn = (l >= r) ? 1.0 : 0.0;
             break;
             
         case comp_lt:
-            rtn = (l_arg->get_value() < r_arg->get_value()) ? 1.0 : 0.0;
+            l = l_arg->get_value();
+            r = r_arg->get_value();
+            if (isnormal(l) && isnormal(r)) rtn = (l < r) ? 1.0 : 0.0;
             break;
             
         case comp_le:
-            rtn = (l_arg->get_value() <= r_arg->get_value()) ? 1.0 : 0.0;
+            l = l_arg->get_value();
+            r = r_arg->get_value();
+            if (isnormal(l) && isnormal(r)) rtn = (l <= r) ? 1.0 : 0.0;
             break;
             
         default: assert(0);
@@ -923,7 +945,9 @@ void define_sim_anneal(char *name, double v_min, double v_init, double v_max)
         return;
     }
     
-    new parameter(name, v_min, v_init, v_max, eval_ptr);
+    parameter *reject_ptr = parameter::find_parameter(REJECT_PARAMETER); // Note: its is OK if this isn't found!
+    
+    new parameter(name, v_min, v_init, v_max, eval_ptr, reject_ptr);
 }
 
 void define_monitor(char *name)
@@ -1079,6 +1103,20 @@ void *define_test_sel(void *t, void *a, void *b)
 // This defines the usual C-stype conditional expression (test) ? a : b
 {
     return new expression((expression *) t, (expression *) a, (expression *) b);
+}
+
+void define_snapshot (char *name, double start, double freq)
+{
+    int s = (unsigned) nearbyint(start);
+    int f = (unsigned) nearbyint(freq);
+    if ((s < 0) || (f < 1)) {
+        fprintf(stderr, "Bad snapshot pragma: start > 0 and frequency >= 1 required\n");
+        yy_n_parse_err++;
+        return;
+    }
+    snapshot_file_name = name;
+    snapshot_first = s;
+    snapshot_frequency = f;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1383,6 +1421,17 @@ int main(int argc, char *argv[])
         ///////////////////////////////////////////////////////////////////////////////////////////
         FILE *inpf = fopen(csv_out_path, "r");
         assert(inpf != nullptr);
+        
+        FILE *snap_of = nullptr;
+        if ((snapshot_file_name != nullptr) && (n_josim_runs >= snapshot_first) &&
+            ( ((n_josim_runs - snapshot_first) % snapshot_frequency) == 0)         ) {
+            //
+            // Time to take a snapshot
+            //
+            sprintf(josim_output_buf, "%s_%u.csv", snapshot_file_name, n_josim_runs);
+            snap_of = fopen(josim_output_buf, "w");
+            assert(snap_of);
+        }
 
         //
         // Process first line of CVS file
@@ -1393,6 +1442,8 @@ int main(int argc, char *argv[])
             exit(1);
         }
 
+        if (snap_of != nullptr) fputs(josim_output_buf, snap_of);       // Copy first line to snapshot file
+        
         char *buf_p;
         {
             //
@@ -1471,6 +1522,7 @@ int main(int argc, char *argv[])
             line_no++;
             if (!fgets(josim_output_buf, max_ln_length - 1, inpf))
                 break;                             // Input file exhausetd
+            if (snap_of != nullptr) fputs(josim_output_buf, snap_of);       // Copy a row to the snapshot file
             buf_p = josim_output_buf;
             double val;
             int nc;
@@ -1494,6 +1546,10 @@ int main(int argc, char *argv[])
         } while (1);
         
         fclose(inpf);
+        if (snap_of != nullptr) {               // Close the snapshot file (if there was one)
+            fclose(snap_of);
+            snap_of = nullptr;
+        }
         
         int status;
         waitpid(child_pid, &status, 0);         // reap the child process
