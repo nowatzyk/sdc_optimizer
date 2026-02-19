@@ -299,7 +299,7 @@ unsigned parameter::sim_anneal_cycle()
         //
         // First time
         //
-        if (!isnormal(new_eval)) {
+        if (!isfinite(new_eval)) {
             fprintf(stderr, "Aborting: sim_anneal needs a valid evaluation on the starting configuration\n");
             exit(1);
         }
@@ -352,7 +352,7 @@ unsigned parameter::sim_anneal_cycle()
         }
 
         if (skip_anneal == 1) {
-            unsigned accept_change = isnormal(new_eval); // A change can only be accepted if it resulted into a valid configuration
+            unsigned accept_change = isfinite(new_eval); // A change can only be accepted if it resulted into a valid configuration
             double t = (old_eval - new_eval) / old_eval;  // t: relative change (t>0 is better)
             //
             // See if we accept this change

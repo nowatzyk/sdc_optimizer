@@ -310,12 +310,12 @@ double expression::get_value()
             
         case function1:
             l = l_arg->get_value();
-            if (isnormal(l)) rtn = func1_ptr(l);
+            if (isfinite(l)) rtn = func1_ptr(l);
             break;
             
         case function2:
             l = l_arg->get_value();
-            if (isnormal(l)) rtn = func2_ptr(noi_ptr, l);
+            if (isfinite(l)) rtn = func2_ptr(noi_ptr, l);
             break;
             
         case p_reference:
@@ -340,43 +340,43 @@ double expression::get_value()
             
         case test_select:
             l = t_arg->get_value();
-            if (isnormal(l)) rtn = (l > 0.0) ? l_arg->get_value() : r_arg->get_value();
+            if (isfinite(l)) rtn = (l > 0.0) ? l_arg->get_value() : r_arg->get_value();
             break;
             
         case comp_eq:
             l = l_arg->get_value();
             r = r_arg->get_value();
-            if (isnormal(l) && isnormal(r)) rtn = (l == r) ? 1.0 : 0.0;
+            if (isfinite(l) && isfinite(r)) rtn = (l == r) ? 1.0 : 0.0;
             break;
             
         case comp_ne:
             l = l_arg->get_value();
             r = r_arg->get_value();
-            if (isnormal(l) && isnormal(r)) rtn = (l != r) ? 1.0 : 0.0;
+            if (isfinite(l) && isfinite(r)) rtn = (l != r) ? 1.0 : 0.0;
             break;
             
         case comp_gt:
             l = l_arg->get_value();
             r = r_arg->get_value();
-            if (isnormal(l) && isnormal(r)) rtn = (l > r) ? 1.0 : 0.0;
+            if (isfinite(l) && isfinite(r)) rtn = (l > r) ? 1.0 : 0.0;
             break;
             
         case comp_ge:
             l = l_arg->get_value();
             r = r_arg->get_value();
-            if (isnormal(l) && isnormal(r)) rtn = (l >= r) ? 1.0 : 0.0;
+            if (isfinite(l) && isfinite(r)) rtn = (l >= r) ? 1.0 : 0.0;
             break;
             
         case comp_lt:
             l = l_arg->get_value();
             r = r_arg->get_value();
-            if (isnormal(l) && isnormal(r)) rtn = (l < r) ? 1.0 : 0.0;
+            if (isfinite(l) && isfinite(r)) rtn = (l < r) ? 1.0 : 0.0;
             break;
             
         case comp_le:
             l = l_arg->get_value();
             r = r_arg->get_value();
-            if (isnormal(l) && isnormal(r)) rtn = (l <= r) ? 1.0 : 0.0;
+            if (isfinite(l) && isfinite(r)) rtn = (l <= r) ? 1.0 : 0.0;
             break;
             
         default: assert(0);
