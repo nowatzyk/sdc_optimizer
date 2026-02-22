@@ -35,6 +35,7 @@ const char* REJECT_PARAMETER = "reject";                       // Keyword fo a r
 
 nodes_of_interest* nodes_of_interest::root = nullptr; // Root of the NOI list
 unsigned nodes_of_interest::n_noi = 0;      // Counts the number of NOI's
+lsq_fit_function* lsq_fit_function::root = nullptr;   // Root for the lsq fit function
 vector<expression*> expression::sum_expressions;    // Needed to track summations
 
 char *snapshot_file_name = nullptr;         // File name for snapshots (if enabled)
@@ -42,7 +43,8 @@ unsigned snapshot_first = 0;
 unsigned snapshot_frequency = 0;
 
 parameter* parameter::root = nullptr;       // start of the parameter list
-param_iterator parameter::iterator[max_param_iterators] = {{nullptr, nullptr}}; // mechanism to allow nested loops
+param_iterator parameter::iterator[max_param_iterators] = {{nullptr, nullptr, nullptr}};
+                                            // mechanism to allow nested loops
 unsigned parameter::nesting_level = 0;      // Nesting level
 vector<parameter *> parameter::p_ptr;       // Paramters subject to optimizations via simulated annealing
 unsigned parameter::changed_flag = 0;       // Part 
@@ -104,6 +106,11 @@ time_series* time_series::root = nullptr;   // Root of the time series
 
 spice_deck circuit;                         // circuit under test
 
+double isfinite_op(double x)
+{
+    return (isfinite(x)) ? 1.0 : 0.0;
+}
+
 f1_table func1_tab[] = {                    // Table of functions with one argument
     {"Sum", nullptr},                       // The summartion function is special and it is
                                             // implemented in the expression class
@@ -111,16 +118,20 @@ f1_table func1_tab[] = {                    // Table of functions with one argum
     {"abs", fabs},                          // Absolute
     {"ln", log},                            // Natural log
     {"exp", exp},                           // e^x
+    {"isfinite", isfinite_op},
     {nullptr, nullptr}
 };
 
 f2_table func2_tab[] = {                    // Functions with 2 arguments
-    {"peak", locate_peak},
-    {"n_peaks", count_peaks},
-    {"t_rise", locate_rise},
-    {"t_fall", locate_fall},
-    {"t_edge", locate_edge},
-    {"n_edges", count_edges},
+    {"peak", locate_peak, noi_type},
+    {"n_peaks", count_peaks, noi_type},
+    {"t_rise", locate_rise, noi_type},
+    {"t_fall", locate_fall, noi_type},
+    {"t_edge", locate_edge, noi_type},
+    {"n_edges", count_edges, noi_type},
+    {"fit_ok", test_lsq_fit, lsq_fit_type},
+    {"fit_coef", lsq_fit_get_cx, lsq_fit_type},
+    {"fit_resi", lsq_fit_residual, lsq_fit_type},
     {nullptr, nullptr}
 };
     
@@ -208,93 +219,146 @@ void nodes_of_interest::print_all()
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
-//////
-
-expression::expression(double x)
+lsq_fit_function::lsq_fit_function(const char* nm, int o, expression *fv, expression *dv)
+//
+// Constructs a lsq_fit object (Duh!)
+//
 {
-    type = constant;
-    value = x;
+    assert((0 < o) && (o <= 4));
+    
+    order = o;
+    name = nm;
+    lsq_fit_ptr = new_lsq_fit (1, order + 1, polynomial_o4);
+    free_var = fv;
+    dep_var = dv;
+    
+    reset();
+    init_lsq_fit (lsq_fit_ptr);        // Get ready
+}
+
+void lsq_fit_function::reset()
+{
+    residual = NAN;
+    for (unsigned i = 0; i <= order; i++)
+        coefficients[i] = NAN;
+}
+
+void lsq_fit_function::add_datum()
+{
+    double x = free_var->get_value();
+    if (!isfinite(x))
+        return;             // It is pointless to add NAN's.
+                            // In fact, signaling NAN is a controlled, reliable way to exclude data points
+                            // Think of it like using 1/0 in gnuplot. Note: that NAN is considereed a number
+                            // by the lexer.
+    double y = dep_var->get_value();
+    if (!isfinite(y))
+        return;             //Dito
+        
+    add_lsq_fit  (lsq_fit_ptr, &x, y);  // This is doing the work
+}
+
+void lsq_fit_function::add_data()
+// Add all data
+{
+    for (lsq_fit_function *f_ptr = root; f_ptr != nullptr; f_ptr = f_ptr->next)
+        f_ptr->add_datum();
+}
+
+void lsq_fit_function::perform_fit()
+{
+    int ie = solve_lsq_fit(lsq_fit_ptr);
+    
+    if (ie == 0) {                      // success: we got a solution
+        residual = rsquare_lsq_fit(lsq_fit_ptr);
+        for (unsigned i = 0; i <= order; i++)
+            coefficients[i] = coeff_lsq_fit(lsq_fit_ptr, i);
+    } else                             // No solution: all is NAN
+        reset();
+     
+     init_lsq_fit (lsq_fit_ptr);        // Get ready for the next fit
+}
+
+
+lsq_fit_function *lsq_fit_function::find(const char* name)
+{
+    for (lsq_fit_function *fit_ptr = root; fit_ptr != nullptr; fit_ptr = fit_ptr->next)
+        if (!strcmp(name, fit_ptr->name))
+            return fit_ptr;
+    return nullptr;    
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+void expression::initialize()
+// The default initializer
+{
+    type = undefined;
     l_arg = nullptr;
     r_arg = nullptr;
     t_arg = nullptr;
+    value = NAN;
     func1_ptr = nullptr;
-    p_ptr = nullptr;
     func2_ptr = nullptr;
-    noi_ptr = nullptr;
+    obj_ptr = nullptr;
+}
+
+expression::expression(double x)
+{
+    initialize();
+    type = constant;
+    value = x;
 }
 
 expression::expression(double (*f_ptr) (double), expression* arg_ptr)
 {
+    initialize();
     if (f_ptr == nullptr) {
         // This is a SUM expression: it has state (unlike all other expressions)
         type = sum_func;
+        value = 0.0;
         sum_expressions.push_back(this);
     } else
         type = function1;
-    value = 0.0;
-    l_arg = arg_ptr;
-    r_arg = nullptr;
-    t_arg = nullptr;
-    func1_ptr = f_ptr;
-    p_ptr = nullptr;
-    func2_ptr = nullptr;
-    noi_ptr = nullptr;
 }
 
 expression::expression(expression* la_ptr, exp_type et, expression* ra_ptr)
 {
+    initialize();
     assert((et == addition) || (et == subtraction) || (et == multiplication) || (et == division) ||
            (et == comp_eq) || (et == comp_ne)  || (et == comp_lt) || (et == comp_le) || (et == comp_gt) || (et == comp_ge) );
     type = et;
-    value = 0.0;
     l_arg = la_ptr;
     r_arg = ra_ptr;
-    t_arg = nullptr;
-    func1_ptr = nullptr;    
-    p_ptr = nullptr;
-    func2_ptr = nullptr;
-    noi_ptr = nullptr;
 }
 
 expression::expression(parameter* param_ptr)
 {
     type = p_reference;
-    value = 0.0;
-    l_arg = nullptr;
-    r_arg = nullptr;
-    t_arg = nullptr;
-    func1_ptr = nullptr;
-    p_ptr = param_ptr;
-    func2_ptr = nullptr;
-    noi_ptr = nullptr;
+    obj_ptr = param_ptr;
 }
 
-expression::expression(double (*f_ptr) (class nodes_of_interest *n_ptr, double x),
-                       class nodes_of_interest* n_ptr, expression* arg_ptr)
+expression::expression(double (*f_ptr) (void *n_ptr, double x), void* o_ptr, expression* arg_ptr)
 {
+    initialize();
     type = function2;
-    value = 0.0;
     l_arg = arg_ptr;
-    r_arg = nullptr;
-    t_arg = nullptr;
-    func1_ptr = nullptr;
-    p_ptr = nullptr;
     func2_ptr = f_ptr;
-    noi_ptr = n_ptr;
+    obj_ptr = o_ptr;
 }
 
 expression::expression(expression* tst_ptr, expression* true_arg, expression* false_arg)
 {
+    initialize();
     type = test_select;
     value = 0.0;
     l_arg = true_arg;
     r_arg = false_arg;
     t_arg = tst_ptr;
-    func1_ptr = nullptr;    
-    p_ptr = nullptr;
-    func2_ptr = nullptr;
-    noi_ptr = nullptr;
 }
 
 double expression::get_value()
@@ -315,11 +379,11 @@ double expression::get_value()
             
         case function2:
             l = l_arg->get_value();
-            if (isfinite(l)) rtn = func2_ptr(noi_ptr, l);
+            if (isfinite(l)) rtn = func2_ptr(obj_ptr, l);
             break;
             
         case p_reference:
-            rtn = p_ptr->get_cur_value();
+            rtn = ((parameter *) obj_ptr)->get_cur_value();
             break;
             
         case addition:
@@ -704,7 +768,7 @@ double time_series::edge_search(unsigned int from, unsigned int to, double min_c
         // and look for the inflection point (2nd derivative == 0).
         
         if (lsq_fit_sys_ptr == nullptr)
-            lsq_fit_sys_ptr = new_lsq_fit (1, 4, polynomial_o3);
+            lsq_fit_sys_ptr = new_lsq_fit (1, 4, polynomial_o4); // Note: only 3rd order used!
         int ec = init_lsq_fit (lsq_fit_sys_ptr);            // Get ready for the fit
         assert(ec == 0);
         
@@ -951,7 +1015,7 @@ void define_sim_anneal(char *name, double v_min, double v_init, double v_max)
 }
 
 void define_monitor(char *name)
-{
+{   
     nodes_of_interest *n_ptr = nodes_of_interest::find(name);
     if (n_ptr != nullptr) {
         fprintf(stderr, "Line %d: '%s' is already monitored\n", yylineno, name);
@@ -1078,25 +1142,43 @@ void *define_function1(char *name, void *x)
     return nullptr;
 }
 
-void *define_function2(char *name, char *ts_name, void *y)
-// defines function on time time_series::~time_series()
+void *define_function2(char *name, char *obj_name, void *y)
+// defines a function on an object
 {
-    double      (*f_ptr) (class nodes_of_interest *noi_ptr, double x) = nullptr;
+    double (*f_ptr) (void *noi_ptr, double x) = nullptr;
+    function_type f_type = none_of_the_above;
     for (unsigned i = 0; func2_tab[i].name != nullptr; i++)
         if (!strcmp(name, func2_tab[i].name)) {
             f_ptr = func2_tab[i].func2_ptr;
+            f_type = func2_tab[i].f_type;
             break;
         }
-            
-    nodes_of_interest *n_ptr = nodes_of_interest::find(ts_name);
-    
-    if ((f_ptr == nullptr) || (n_ptr == nullptr)) {
-        fprintf(stderr, "Line %d: function or monitored column undefined\n", yylineno);
+        
+    if (f_ptr == nullptr) {
+        fprintf(stderr, "Line %d: function is undefined\n", yylineno);
         yy_n_parse_err += 1;
         return nullptr;
     }
 
-    return new expression(f_ptr, n_ptr, (expression *) y);
+    void *obj_ptr = nullptr;
+    switch (f_type) {
+        case noi_type:
+            obj_ptr = nodes_of_interest::find(obj_name);  // Try a node of interest
+            break;
+        case lsq_fit_type:
+            obj_ptr = lsq_fit_function::find(obj_name);
+            break;
+        default:
+            assert(0);
+    }
+    
+    if (obj_ptr == nullptr) {
+        fprintf(stderr, "Line %d: function object is not defined\n", yylineno);
+        yy_n_parse_err += 1;
+        return nullptr;
+    }
+
+    return new expression(f_ptr, obj_ptr, (expression *) y);
 }
 
 void *define_test_sel(void *t, void *a, void *b)
@@ -1119,12 +1201,48 @@ void define_snapshot (char *name, double start, double freq)
     snapshot_frequency = f;
 }
 
+void define_lsq_fit(char *name, double order, void *x, void *y)
+// creates an LSQ fit operation
+//
+// Adding an LSQ fit via the parameter class is a bit awkward and probably not a good
+// idea. It is awkward, because a LSQ fit does not have an obviuos value associated with
+// it.
+{
+    lsq_fit_function *lsq_ptr = lsq_fit_function::find(name);
+    if (nullptr != lsq_ptr) {
+        fprintf(stderr, "Line: %d: duplicate name\n", yylineno);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    int i_order = (int) nearbyint(order);
+    if ((i_order < 1) || (i_order > 4)) {
+        fprintf(stderr, "Line: %d: currently only first to fourth oder polynomial are supported\n", yylineno);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    lsq_ptr = new lsq_fit_function(name, i_order, (expression *) x, (expression *) y);
+    parameter::enqueue_fit_function(lsq_ptr);
+}
+
+double not_op(double x)
+{
+    // Note: what to do if x == NAN is up for debate. Here it is treated as a not-zero, thus a 0 is returned
+    return (x == 0.0) ? 1.0 : 0.0;
+}
+
+void *define_not(void *x)
+{
+    return new expression(not_op, (expression *) x);
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Analysis functions
 //
 
-double locate_peak(nodes_of_interest *noi_ptr, double x)
+double locate_peak(void *obj_ptr, double x)
 //
 // The node of interest is expected to be a voltage time series and this fuction will determine the
 // time of the x-th peak. <x> is expected to be an integer and peaks are numbered 0,1,2,...
@@ -1132,6 +1250,8 @@ double locate_peak(nodes_of_interest *noi_ptr, double x)
 // A NAN is returned upon failure
 //
 {
+    nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
+
     int n_peak = (int) nearbyint(x);
     if (n_peak < 0)
         return NAN;
@@ -1159,7 +1279,7 @@ double locate_peak(nodes_of_interest *noi_ptr, double x)
     } while (1);
 }
 
-double count_peaks(nodes_of_interest *noi_ptr, double x)
+double count_peaks(void *obj_ptr, double x)
 //
 // The node of interest is expected to be a voltage time series and this fuction counts the number
 // of peaks.
@@ -1167,6 +1287,8 @@ double count_peaks(nodes_of_interest *noi_ptr, double x)
 // The argment <x> isn't used for now. May be used to supply threshold fractions later
 //
 {
+    nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
+
     unsigned n_peaks = 0;
     
     int ind = noi_ptr->get_col_index();
@@ -1191,7 +1313,7 @@ double count_peaks(nodes_of_interest *noi_ptr, double x)
     return NAN;                         // Should not get here
 }
 
-double locate_rise(nodes_of_interest *noi_ptr, double x)
+double locate_rise(void *obj_ptr, double x)
 //
 // Similar to the peak seach, but locate the rising edge of a phase transition.
 // The node of interest ought to be a phase column and a rising transition mean that the phase
@@ -1201,6 +1323,8 @@ double locate_rise(nodes_of_interest *noi_ptr, double x)
 // second derivative.
 //
 {
+    nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
+
     int n_peak = (int) nearbyint(x);
     if (n_peak < 0)
         return NAN;
@@ -1234,8 +1358,10 @@ double locate_rise(nodes_of_interest *noi_ptr, double x)
     return NAN;
 }
 
-double locate_fall(nodes_of_interest *noi_ptr, double x)
+double locate_fall(void *obj_ptr, double x)
 {
+    nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
+    
     int n_peak = (int) nearbyint(x);
     if (n_peak < 0)
         return NAN;
@@ -1269,9 +1395,11 @@ double locate_fall(nodes_of_interest *noi_ptr, double x)
     return NAN;
 }
 
-double locate_edge(nodes_of_interest *noi_ptr, double x)
+double locate_edge(void *obj_ptr, double x)
 // Dito, but locates any edge (rising or falling
 {
+    nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
+    
     int n_peak = (int) nearbyint(x);
     if (n_peak < 0)
         return NAN;
@@ -1302,11 +1430,13 @@ double locate_edge(nodes_of_interest *noi_ptr, double x)
     return NAN;
 }
 
-double count_edges(nodes_of_interest *noi_ptr, double x)
+double count_edges(void *obj_ptr, double x)
 // Counts the number of edges (regardless of direction)
 //
 // <x> isn't used now, but may be used later to supply edge search parameters
 {
+    nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
+    
     unsigned n_edges = 0;
     
     int ind = noi_ptr->get_col_index();
@@ -1333,6 +1463,23 @@ double count_edges(nodes_of_interest *noi_ptr, double x)
     } while (1);   
     
     return NAN;                         // unreachable
+}
+
+double test_lsq_fit(void *obj_ptr, double x)
+{
+    return ((lsq_fit_function *) obj_ptr)->fit_ok();
+}
+
+double lsq_fit_get_cx(void *obj_ptr, double x)
+{
+    int ci = (int) nearbyint(x);
+    assert((0 <= ci) && (ci < 5));
+    return ((lsq_fit_function *) obj_ptr)->get_ci(ci);
+}
+
+double lsq_fit_residual(void *obj_ptr, double x)
+{
+    return ((lsq_fit_function *) obj_ptr)->get_residual();
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1566,6 +1713,7 @@ int main(int argc, char *argv[])
         //
 //        nodes_of_interest::print_all();
         parameter::list_c_val(sum_fp);
+        lsq_fit_function::add_data();           // add data (if any) to active fit functions
 
         unsigned level;
         n_josim_runs++;                         // Done with this run

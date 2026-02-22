@@ -32,7 +32,9 @@
                             };
                         yylval.val = val;
                         return NUMBER;
-                    }
+                     }
+                    
+<IN_PRAGMA>"NAN"     { yylval.val = NAN; return NUMBER; }
                     
 <IN_PRAGMA>"scan"    { return SCAN; }
 
@@ -43,6 +45,8 @@
 <IN_PRAGMA>"monitor" { return MONITOR; }
 
 <IN_PRAGMA>"snapshot" { return SNAPSHOT; }
+
+<IN_PRAGMA>"lsq_fit" { return LSQ_FIT; }
 
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     
@@ -69,6 +73,7 @@
 <IN_PRAGMA>">="     { return COMP_GE; }
 <IN_PRAGMA>"<="     { return COMP_LE; }
 <IN_PRAGMA>"<"      { return COMP_LT; }
+<IN_PRAGMA>"!"      { return NOT; }
 
 <IN_PRAGMA>.        { fprintf(stderr, "Line %d: Unrecognized pragma character in *.cir file: '%s'\n", yylineno, yytext); } 
 

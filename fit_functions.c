@@ -25,4 +25,11 @@ double monomial_f3(double *x)
     return x[0] * x[0] * x[0];
 }
 
-double (*polynomial_o3[4])(double *x) = {monomial_f0, monomial_f1, monomial_f2, monomial_f3};
+double monomial_f4(double *x)
+{
+    double t = x[0] * x[0];
+    return t * t;;
+}
+
+
+double (*polynomial_o4[5])(double *x) = {monomial_f0, monomial_f1, monomial_f2, monomial_f3, monomial_f4};

@@ -22,13 +22,14 @@ int yylex(void);
 %token <val> NUMBER
 %type <pointer> expr terminal
 %token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER ASSIGN COMMA
-%token SIM_ANNEAL SNAPSHOT
+%token SIM_ANNEAL SNAPSHOT LSQ_FIT
 
 %left TEST_OP OTHERWISE
 %left COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
 %left PLUS MINUS
 %left MULT DIVIDE
 %left OPAR CPAR
+%left NOT
 
 %%
 input:
@@ -54,6 +55,7 @@ pragma_body:
     |   PARAMETER SYMBOL SIM_ANNEAL NUMBER NUMBER NUMBER  { define_sim_anneal($2, $4, $5, $6); }
     |   MONITOR SYMBOL                      { define_monitor($2); }
     |   SNAPSHOT SYMBOL NUMBER NUMBER       { define_snapshot($2, $3, $4); }
+    |   LSQ_FIT SYMBOL NUMBER expr expr     { define_lsq_fit($2, $3, $4, $5); }
     ;
     
 expr:
@@ -70,6 +72,7 @@ expr:
     |   expr COMP_LE expr                   { $$ = define_le($1, $3); }
     |   OPAR expr CPAR                      { $$ = $2; }
     |   expr TEST_OP expr OTHERWISE expr    { $$ = define_test_sel($1, $3, $5); }
+    |   NOT expr                            { $$ = define_not($2); }
     ;
     
 terminal:

@@ -25,8 +25,14 @@ struct zel_element {                        // Zero-expression list element
     zel_element *next;                      // Next or nullpter
 };
 
+struct fit_element {                        // lsq_fit list element
+    lsq_fit_function  *fit_ptr;             // Pointer to lsq fit object
+    fit_element *next;                      // Next or nullpter
+};
+
 struct param_iterator {                     // A parameter iterator
-    zel_element *zel_ptr;                   // stuff that needs to be aeroed
+    zel_element *zel_ptr;                   // stuff that needs to be zeroed
+    fit_element *fit_ptr;                   // lsq_fits that need to be computed
     parameter   *param_ptr;                 // Pointer to the parameter
 };
 
@@ -94,9 +100,9 @@ class parameter {
     static unsigned cur_sched;              // Which schedule is current
     static unsigned sched_stp_cntr;         // Current step
     static FILE     *sa_log;                // Optinional log file
-  
+    
     //
-    // Internal function
+    // Internal functions
     //
     void            i_reset() {step_cntr = 0;}; // Restarts an iterator type
     int             i_next(); 
@@ -130,6 +136,7 @@ public:
     double      get_cur_value();
     
     static void enqueue_zero_op(expression *e_ptr); // Summation op to be zeroed
+    static void enqueue_fit_function(lsq_fit_function *f_ptr); // Fits to be updated
     
     static unsigned open_sa_log_file(char *nm); // Opens a log file for the simulated annealing feature
     static unsigned read_sa_schedule(char *nm); // Read the simulated annealing schedule

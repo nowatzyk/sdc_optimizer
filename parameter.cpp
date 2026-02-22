@@ -39,6 +39,8 @@ using namespace std;
 extern "C" {
 #include "parser.h"                         // Bison generated headers (in build dir)
 #include "lex.yy.h"                         // Flex-generated header (in build dir)
+#include "lsq_fit.h"
+#include "fit_functions.h"
 #include "parser_interf.h"                  // needed to integrate the parser
 }
 
@@ -165,6 +167,38 @@ int parameter::advance(unsigned &lvl)
 // so that a plot function can use this info to only use data points that are a function of
 // the innermost loop(s) having been completed.
 //
+// Parameters like scan, binary_search, and simulated annealing cause the JoSIM simulation to
+// to be re-run, only with the paramters changing values in some way. The output of the simulation
+// is then digested and analyzed is some way, which may change the way paramters are changed.
+// This means that there are multiple levels of loops arround the simulation/analysis core.
+// A san type loop will simply cycle one parameter through a prefefined series of values. Having a second
+// paramter scan, just means that 2 paramters will cyles through their values, essentially an two-
+// dimensional nested loop.
+//
+// Some analysis can depend on a particular loop being completed. For example, one scan type parameter
+// has exhausetd all possible values, and some property of the circuit is computed over all these runs.
+// The summ-operator is one such example: it sums up expressions that are functions of the outcome
+// of each simulation, say to find an average, or a minmum, etc. If this is not the outermost loop,
+// then the summation must be reset, once the loop is restarted. So there is some work that needs to
+// to be done whenever one loop completes. The <iterator> structure keeps track of that.
+//
+// Where things get messy, is the order in which this housekeeping work is done. This is critical for
+// the way this facility is used, but it is also obscure and not obvious from the annotated/instrumented
+// circuit file. Thus this long-winded comment. In a nutshell once a loop is complete, this is done
+// in this specific order:
+//
+// 1. Compute any least-squate fits: this means that expressions refering to the results of a LSQ fit
+//    will now produce the correct values.
+// 2. save the result of the eval-expression that is controlling the simulated annealing, which is
+//    always the outermost, top-level loop. <eval> expressions, may depend on results from the LSQ fit,
+//    which means that the above must be done first.
+// 3. Zero (reset) any summation expression. This will destroy their current value. The eval-function
+//    may depend on summation expressions, therefore, this maust be done last.
+//
+// This logic is hardwired into this code, but it is somthing of a mess, because this way of doing business
+// is not obvios, but it is important for how to structure the pragmas that explore a circuit.
+// Sorry, but I don't have a better idea right now.
+//
 {
     for (unsigned level = 0; level < nesting_level; level++) {
 
@@ -172,6 +206,10 @@ int parameter::advance(unsigned &lvl)
             lvl = level;
             return 0;
         }
+        
+        // Level <level> is done, new it is time to compute any LSQ fits for this level
+        for (fit_element *f_ptr = iterator[level].fit_ptr; f_ptr != nullptr; f_ptr = f_ptr->next)
+            f_ptr->fit_ptr->perform_fit();
         
         if (enable_sim_anneal) {
             // Save the evaluation, which might depend on sums that are about to be zero-ed
@@ -275,6 +313,14 @@ void parameter::enqueue_zero_op(expression* expr_ptr)
     z_ptr->e_ptr = expr_ptr;
     z_ptr-> next = iterator[nesting_level].zel_ptr;
     iterator[nesting_level].zel_ptr = z_ptr;
+}
+
+void parameter::enqueue_fit_function(lsq_fit_function *lsqf_ptr)
+{
+    fit_element *f_ptr = new fit_element;
+    f_ptr->fit_ptr = lsqf_ptr;
+    f_ptr-> next = iterator[nesting_level].fit_ptr;
+    iterator[nesting_level].fit_ptr = f_ptr;
 }
 
 void parameter::save_best()

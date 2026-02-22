@@ -19,7 +19,7 @@ const char spice_escape = '~';              // Escape character in spice decks f
 const double edge_search_min_chg = 0.6667;  // For an edge search on a phase, this is the min change required
                                             // to be considered an edge (in fractions of a turn, = 2PI phase)
 const double edge_search_t_win = 10.0e-12;  // max edge transition time 10 pico-seconds
-const double edge_search_slope_frac = 1.0; // Defines the fraction of the min_chg (see above) that is used to
+const double edge_search_slope_frac = 1.0;  // Defines the fraction of the min_chg (see above) that is used to
                                             // to determine the transition point
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -28,18 +28,22 @@ const double edge_search_slope_frac = 1.0; // Defines the fraction of the min_ch
 //
 
 struct t_of_peaks {
-    unsigned    n_pks;                      // #of peaks
-    double      *t_pks;                     // Time of peaks
+    unsigned            n_pks;              // #of peaks
+    double              *t_pks;             // Time of peaks
 };
 
 struct f1_table {                           // Function pointer f1_table
-    const char  *name;                      // Name of this function (or nullptr)
-    double      (*func1_ptr) (double x);    // Pointer to the funcion
+    const char          *name;              // Name of this function (or nullptr)
+    double              (*func1_ptr) (double x); // Pointer to the funcion
 };
 
+enum function_type {noi_type, lsq_fit_type, none_of_the_above};
+
 struct f2_table {                           // Function pointer f2_table
-    const char  *name;                      // Name of this function (or nullptr)
-    double      (*func2_ptr) (class nodes_of_interest *noi_ptr, double x);    // Pointer to the funcion
+    const char          *name;              // Name of this function (or nullptr)
+    double              (*func2_ptr) (void *obj_ptr, double x);
+                                            // Pointer to the associated object and argument
+    function_type       f_type;             // used to find the correct object pointer
 };
 
 
@@ -50,11 +54,11 @@ struct f2_table {                           // Function pointer f2_table
 
 class nodes_of_interest {
     static nodes_of_interest *root;         // Start of NOI list
-    nodes_of_interest *next;                // Pointer to the next list element
-    static unsigned n_noi;                  // #of nodes of interest
+    nodes_of_interest   *next;              // Pointer to the next list element
+    static unsigned     n_noi;              // #of nodes of interest
     
-    const char  *name;                      // Name of this NOI
-    int         col_index;                  // Which column of the Josim output (or -1)
+    const char          *name;              // Name of this NOI
+    int                 col_index;          // Which column of the Josim output (or -1)
 
 public:
     static nodes_of_interest *find(const char *name);     // Find the named NOI and return its VA
@@ -68,17 +72,58 @@ public:
     const char *get_name() {return name;};
     static nodes_of_interest *find_undef(); // Returns point to the first NOI with col_index < 0
     
-    int print(char *f_name);
-    static void print_all();                // Saves all NOI's to files
+    int                 print(char *f_name);
+    static void         print_all();        // Saves all NOI's to files
+};
+
+class expression;                           // is defined below
+
+class lsq_fit_function {                    // device to perfor lsq fits
+    const char          *name;              // Name
+    struct lsq_fit      *lsq_fit_ptr;       // The fit system
+    
+    expression          *free_var;          // The free variable, say x
+    expression          *dep_var;           // The dependent variable, say y=f(x)
+    
+    unsigned            order;              // highest monomial power used
+    double              residual;           // The fit error residual, or NAN if there is no solution
+    double              coefficients[5];    // Right now, up to 4th oder polynomials are supported
+    //
+    // Heads up: the lsq_system can use other function types and is not restriced to just
+    //           one independent variable. However more complex fits require a lot of data and 
+    //           careful planning. 4th degree polynomials are already a hand full, so more
+    //           complex stuff will be added only when needed.
+    //
+    
+    static lsq_fit_function *root;          // The usual way to find
+    lsq_fit_function    *next;              //  this object
+    
+    void                add_datum();        // Add a data point to the fit
+    void                reset();            // clears previous results
+    
+public:
+    lsq_fit_function(const char *name, int order, expression *free_var, expression *dep_var);
+    
+    static lsq_fit_function *find(const char *name);
+                                            // Find a fit system
+    static void         add_data();         // Add all data
+    void                perform_fit();      // compute the actual fit
+    
+    double              fit_ok() {return (isfinite(residual)) ? 1.0 : 0.0;};
+    double              get_ci(unsigned i) {assert(i <= order); return coefficients[i];}
+    double              get_residual() {return residual;};
 };
 
 // Some related function definitione:
-double locate_peak(nodes_of_interest *noi_ptr, double x);
-double count_peaks(nodes_of_interest *noi_ptr, double x);
-double locate_rise(nodes_of_interest *noi_ptr, double x);
-double locate_fall(nodes_of_interest *noi_ptr, double x);
-double locate_edge(nodes_of_interest *noi_ptr, double x);
-double count_edges(nodes_of_interest *noi_ptr, double x);
+double locate_peak(void *obj_ptr, double x);
+double count_peaks(void *obj_ptr, double x);
+double locate_rise(void *obj_ptr, double x);
+double locate_fall(void *obj_ptr, double x);
+double locate_edge(void *obj_ptr, double x);
+double count_edges(void *obj_ptr, double x);
+double test_lsq_fit(void *obj_ptr, double x);
+double lsq_fit_get_cx(void *obj_ptr, double x);
+double lsq_fit_residual(void *obj_ptr, double x);
 
 class parameter;                            // Forward declaration so that it can be used in the expression class
     
@@ -86,7 +131,7 @@ enum    exp_type {                          // Type of expression
                 constant,
                 sum_func,
                 function1,                  // Function with 1 argument
-                function2,                  // function with 2 arguments
+                function2,                  // function with 2 arguments, first being an object
                 p_reference,
                 addition,
                 subtraction,
@@ -98,7 +143,8 @@ enum    exp_type {                          // Type of expression
                 comp_gt,
                 comp_ge,
                 comp_lt,
-                comp_le
+                comp_le,
+                undefined
                 };
 
 class expression {
@@ -109,19 +155,16 @@ class expression {
     expression  *t_arg;                     // A 3rd argument, needed for thest-select op
     double      value;                      // the value (if this is a constant or a sum)
     double      (*func1_ptr)(double x);     // Function1 pointer
-    double      (*func2_ptr)(class nodes_of_interest *noi_ptr, double x);     // Function2 pointer
-    parameter   *p_ptr;                     // Parameter pointer
-    nodes_of_interest *noi_ptr;             // NOI pointer
+    double      (*func2_ptr)(void *obj_ptr, double x);     // Function2 pointer
+    void        *obj_ptr;                   // Object pointer
     // Note: TBD save some space and make this a union
     
     static vector<expression*> sum_expressions; // The expressions computing a sum    
-
+    void        initialize();               // Initializes the data structure
 public:
     expression  (double x);                 // creates a constant expression
     expression  (double (*f_ptr)(double x), expression *arg_ptr);   // creates a function expression with 1 arg 
-    expression  (double (*f_ptr)(class nodes_of_interest *noi_ptr, double x), 
-                 class nodes_of_interest *noi_ptr,
-                 expression *arg_ptr);
+    expression  (double (*f_ptr)(void *obji_ptr, double x), void *obj_ptr, expression *arg_ptr);
     expression  (expression *la_ptr, exp_type et, expression *ra_ptr); // creates a prmitive op
     expression  (parameter *p_ptr);         // Creates a parameter reference
     expression  (expression *test_ptr, expression *true_arg, expression *false_arg);
