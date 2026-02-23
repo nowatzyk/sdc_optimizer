@@ -236,6 +236,9 @@ lsq_fit_function::lsq_fit_function(const char* nm, int o, expression *fv, expres
     
     reset();
     init_lsq_fit (lsq_fit_ptr);        // Get ready
+    
+    next = root;                        // Enque object to be findable
+    root = this;
 }
 
 void lsq_fit_function::reset()
@@ -317,13 +320,16 @@ expression::expression(double x)
 expression::expression(double (*f_ptr) (double), expression* arg_ptr)
 {
     initialize();
+    l_arg = arg_ptr;
     if (f_ptr == nullptr) {
         // This is a SUM expression: it has state (unlike all other expressions)
         type = sum_func;
         value = 0.0;
         sum_expressions.push_back(this);
-    } else
+    } else {
         type = function1;
+        func1_ptr = f_ptr;
+    }
 }
 
 expression::expression(expression* la_ptr, exp_type et, expression* ra_ptr)

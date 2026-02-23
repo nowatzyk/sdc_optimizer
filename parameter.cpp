@@ -317,10 +317,15 @@ void parameter::enqueue_zero_op(expression* expr_ptr)
 
 void parameter::enqueue_fit_function(lsq_fit_function *lsqf_ptr)
 {
+    if (nesting_level < 1) {
+        fprintf(stderr, "Line %d: LSQ fits need more than 1 dataum. Should be use after some looping construct\n", yylineno);
+        yy_n_parse_err++;
+        return;
+    }
     fit_element *f_ptr = new fit_element;
     f_ptr->fit_ptr = lsqf_ptr;
-    f_ptr-> next = iterator[nesting_level].fit_ptr;
-    iterator[nesting_level].fit_ptr = f_ptr;
+    f_ptr-> next = iterator[nesting_level - 1].fit_ptr;
+    iterator[nesting_level - 1].fit_ptr = f_ptr;
 }
 
 void parameter::save_best()
