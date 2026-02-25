@@ -396,7 +396,7 @@ unsigned parameter::sim_anneal_cycle()
             save_best();                        // .. and how it was achived
             t_max = MAX_RESET;                  // reset the reset counter
         } else if (0 >= t_max--) {              // reset if we went on a wrong path for too long
-            old_eval = new_eval = min_eval;		// restore previous best
+            old_eval = new_eval = min_eval;     // restore previous best
             restore_best();
             t_max = MAX_RESET;                  // reset the reset counter
             skip_anneal = 0;
@@ -587,4 +587,13 @@ void parameter::unchange_param()
 #endif
 
     changed_param->cur_value = changed_value;
+}
+
+void parameter::print_sa_results(FILE *sar_fp)
+{
+    for (parameter *p_ptr = root; p_ptr != nullptr; p_ptr = p_ptr->next)
+        if (p_ptr->type == sim_anneal)
+            fprintf(sar_fp, "*Pragma parameter %s = %.12lg\n", p_ptr->name, p_ptr->cur_value);
+                    // Note: cur_value should be == best_val because best_val is resored
+                    // at the end of the simulated annealing procedure
 }

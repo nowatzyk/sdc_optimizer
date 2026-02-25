@@ -1509,7 +1509,7 @@ int main(int argc, char *argv[])
     }
     
     if ((argc < 2) || (argc > 4)) {
-        fprintf(stderr, "csv_analyzer <spice source file> [<sa_schedule> [<sa_log_file>]]\n");
+        fprintf(stderr, "csv_analyzer <base-file-name> [<sa_schedule> [<sa_log_file>]]\n");
         exit(1);
     }
    
@@ -1527,12 +1527,14 @@ int main(int argc, char *argv[])
         }
     }
     
-    if (1 > circuit.read_cir_file(argv[1])) {
+    sprintf(josim_output_buf, "%s.cir", argv[1]);
+    if (1 > circuit.read_cir_file(josim_output_buf)) {
         fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
         exit(1);
     }
          
-    FILE *sum_fp = fopen("Summary.dat", "w");
+    sprintf(josim_output_buf, "%s_sum.dat", argv[1]);
+    FILE *sum_fp = fopen(josim_output_buf, "w");
     assert(sum_fp != nullptr);
     fprintf(sum_fp, "#");
     fprintf(sum_fp, " (%u):level\n", parameter::list_names(sum_fp));
@@ -1731,6 +1733,14 @@ int main(int argc, char *argv[])
     }
     
     fclose(sum_fp);
+    
+    if (parameter::sim_anneal_in_use()) {
+        sprintf(josim_output_buf, "%s_SA_result.txt", argv[1]);
+        FILE *sar_fp = fopen(josim_output_buf, "w");
+        assert(sar_fp);
+        parameter::print_sa_results(sar_fp);
+        fclose(sar_fp);
+    }
 
     exit(0);
 }

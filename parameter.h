@@ -11,7 +11,7 @@ extern const char*  EVAL_PARAMETER;         // The evaluation function parameter
 #define REJ_MAX     20                      // #of rejects before reducing change scale
                                             //   in simulated annealing
 
-#define MAX_RESET   5000                    // patience factor: if opt wasn't improved in this
+#define MAX_RESET   1000                    // patience factor: if opt wasn't improved in this
                                             // many steps, reset to optimum
 
 #define MAX_CHANGE_TRIES 50                 // #of times a parameter change can be rejected
@@ -140,4 +140,7 @@ public:
     
     static unsigned open_sa_log_file(char *nm); // Opens a log file for the simulated annealing feature
     static unsigned read_sa_schedule(char *nm); // Read the simulated annealing schedule
+    
+    static unsigned sim_anneal_in_use() {return enable_sim_anneal;}
+    static void print_sa_results(FILE *sar_fp);
 };
