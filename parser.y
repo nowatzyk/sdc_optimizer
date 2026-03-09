@@ -16,13 +16,15 @@ int yylex(void);
     char   *text;
     double val;
     void   *pointer;
+    unsigned flags;
 }
     
 %token <text> END LINE SYMBOL PSUBSTITUTION
 %token <val> NUMBER
-%type <pointer> expr terminal
-%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER ASSIGN COMMA
-%token SIM_ANNEAL SNAPSHOT LSQ_FIT
+%type <pointer> expr terminal range opt_range
+%type <flags> attribute attributes
+%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB
+%token SIM_ANNEAL SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE
 
 %left TEST_OP OTHERWISE
 %left COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
@@ -50,12 +52,33 @@ line:
     ;
 
 pragma_body:
-        PARAMETER SYMBOL SCAN NUMBER NUMBER NUMBER  { define_param_scan($2, $4, $5, $6); }
-    |   PARAMETER SYMBOL ASSIGN expr        { define_para_expression($2, $4); }
-    |   PARAMETER SYMBOL SIM_ANNEAL NUMBER NUMBER NUMBER  { define_sim_anneal($2, $4, $5, $6); }
+        PARAMETER SYMBOL SCAN range NUMBER attributes
+                                            { define_param_scan($2, $4, $5, $6); }
+    |   PARAMETER SYMBOL EQUAL expr opt_range attributes
+                                            { define_param_expression($2, $4, $5, $6); }
+    |   PARAMETER SYMBOL SET NUMBER opt_range attributes
+                                            { define_param_constant($2, $4, $5, $6); }
     |   MONITOR SYMBOL                      { define_monitor($2); }
     |   SNAPSHOT SYMBOL NUMBER NUMBER       { define_snapshot($2, $3, $4); }
     |   LSQ_FIT SYMBOL NUMBER expr expr     { define_lsq_fit($2, $3, $4, $5); }
+    ;
+    
+opt_range:                                  { $$ = NULL; }
+    |   range                               { $$ = $1; }
+    ;
+    
+attributes :                                 { $$ = 0; }
+    |   attributes attribute                { $$ = $1 | $2; }
+    ;
+    
+attribute :
+        NO_PRINT                            { $$ = 1; }
+    |   LOG_MAP                             { $$ = 2; }
+    |   TUNEABLE                            { $$ = 4; }
+    ;
+    
+range:
+        OSQB NUMBER COMMA NUMBER CSQB       { $$ = define_range($2, $4); }
     ;
     
 expr:

@@ -1,5 +1,7 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.10)
 project(csv_analyzer LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(FLEX REQUIRED)
 find_package(BISON REQUIRED)
@@ -26,6 +28,10 @@ add_executable(csv_analyzer
     fit_functions.c
     xrand.cpp
     parameter.cpp
+    eval_cache.cpp
+    expression.cpp sum_expression.cpp geomean_expression.cpp min_expression.cpp max_expression.cpp
+    loop_complex.cpp lsq_fit_function.cpp anneal.cpp
+    nodes_of_interest.cpp spice_deck.cpp parser_interface.cpp
     ${BISON_pragma_parser_OUTPUTS}
     ${FLEX_pragma_lexer_OUTPUTS}
 )

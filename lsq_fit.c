@@ -107,7 +107,7 @@ struct lsq_fit *new_lsq_fit (int n_var, int n_func, double (**F)(double *))
 
   // Note: only the lower triangular part of A (incl. diagonal)
   //       is allocated
-  l->A = (double *) malloc (((n_func * (n_func + 1)) / 2) * sizeof(double *));
+  l->A = (double *) malloc (((n_func * (n_func + 1)) / 2) * sizeof(double));
   if (l->A == 0)
     return 0;
 
@@ -116,7 +116,7 @@ struct lsq_fit *new_lsq_fit (int n_var, int n_func, double (**F)(double *))
   if (l->Dc == 0)
     return 0;
 
-  l->Ac = (double *) malloc (((n_func * (n_func + 1)) / 2) * sizeof(double *));
+  l->Ac = (double *) malloc (((n_func * (n_func + 1)) / 2) * sizeof(double));
   if (l->Ac == 0)
     return 0;
 #endif

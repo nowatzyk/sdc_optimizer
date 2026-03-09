@@ -3,6 +3,12 @@
 //
 #pragma once
 
+#include <math.h>
+#include <stdio.h>
+#include <vector>
+
+class expression;                           // Forward declaration (instead of pulling in the expression.h file)
+
 #define _ADAPTIVE_RANGEING_                 // If defined, the change scale is adjusted
                                             // individually for each parameter
 const double MIN_RANGE = 1.0e-6;            // Min. parameter change range
@@ -20,127 +26,100 @@ extern const char*  EVAL_PARAMETER;         // The evaluation function parameter
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct zel_element {                        // Zero-expression list element
-    expression  *e_ptr;                     // Pointer to expression
-    zel_element *next;                      // Next or nullpter
-};
-
-struct fit_element {                        // lsq_fit list element
-    lsq_fit_function  *fit_ptr;             // Pointer to lsq fit object
-    fit_element *next;                      // Next or nullpter
-};
-
-struct param_iterator {                     // A parameter iterator
-    zel_element *zel_ptr;                   // stuff that needs to be zeroed
-    fit_element *fit_ptr;                   // lsq_fits that need to be computed
-    parameter   *param_ptr;                 // Pointer to the parameter
-};
-
 struct an_sched {                           // annealing schedule
     double          temp;                   // Starting temp for this phase
     unsigned        n_steps;                // #of steps
 };
 
 class parameter {
+protected:
     //
     //  Common elements (housekeeping, etc)
     //
     char        *name;
-    enum {scan, assignment, bin_search, sim_anneal, undefined} type;   // Parameter type
+    enum {constant, assignment, scan, bin_search, undefined} type;   // Parameter type
    
-    parameter      *next;                   // List pointer
-    static parameter *root;                 // Anchor
+    static std::vector<parameter *> parameters;  // Collection of all parameters
     static unsigned nesting_level;          // How many iterator type parameters are nested
-    static param_iterator iterator[max_param_iterators]; // Note: innermost loop is at level 0
-                                            
-    //
-    // Variables used by the scan function:
-    //
-    double          min_value, max_value;   // Range of values to step through
-                                            // Note: these are also used by bin search and simulated annealing
-    unsigned        n_steps;                // #of n_steps
-    double          d_value;                // Step size
-    unsigned        step_cntr;              // Step counter
     
-    //
-    // assignment type parameter
-    //
-    expression      *expr;                  // Pointer to expression
-     
-    //
-    // Simulated annealing state:
-    //
-    static unsigned enable_sim_anneal;      // If set != 0, simulated annealing is in use
-    double          cur_value;              // Current value
-    double          best_val;               // Best value for this parameter encountered so far
-    static unsigned	have_best;              // is !0 if best value is defined
-#ifdef _ADAPTIVE_RANGEING_
-    int             n_reject;               // #of of rejects in a row
-    int             n_accept;               // #of accepts in a row
-    int             acc_pos;                // last accept was a positive change
-    double          range;                  // Change-range
-#endif
-    static vector<parameter*> p_ptr;        // Collection of parameters Subject to anealing
-    static unsigned changed_flag;           // Change-machinery: indicate validity    
-    static parameter *changed_param;        // Which was changed last
-    static double	changed_value;          // What was its pre-change value
-    static parameter *eval_ptr;             // The evaluation function
-    static parameter *reject_ptr;           // Optional reject function
-    
-    //
-    // The working variables of the simulated annealing optimization function
-    //
-    static double   t0, t1, dt;             // annealing temperature
-    static double   old_eval, new_eval, min_eval;
-    static unsigned n_sim_anneal;           // Counts the smulated annealing cycles
-    static int      n_rej, t_max;
-    static double   d_scale;                // scales the range of changes
-    static unsigned out_cnt;                // Used to control the volume of the log-output
-    static vector<an_sched> as;             // The anealing schedule
-    static unsigned cur_sched;              // Which schedule is current
-    static unsigned sched_stp_cntr;         // Current step
-    static FILE     *sa_log;                // Optinional log file
-    
-    //
-    // Internal functions
-    //
-    void            i_reset() {step_cntr = 0;}; // Restarts an iterator type
-    int             i_next(); 
-    void            default_init(char *nm); // Initialize a generic parameter class member
+    // attributes:
+    unsigned        no_print:1;             // If set, do not include in summary
+    unsigned        tunable:1;              // If set, will be subject to simulated annealing, BO, etc.
+    unsigned        log_map:1;              // Uses logarithmic mapping of tuning range
 
+    // Common:
+    double          min_value, max_value;   // Value range
+    double          value;                  // The current value
+    
+    // Internal functions:
     void            print_name(FILE *fp);   // Output functions
     void            print_value(FILE *fp);
-    
-    static unsigned sim_anneal_cycle();     // Perform one simulated annealing update cycle
-    static void     restore_best();
-    static void     save_best();
-    static void     change_param(double c_range);
-    static void     unchange_param();
+
+    parameter(char *nm,
+              double v_min = __DBL_MAX__, double v_max = -__DBL_MAX__,
+              unsigned npr = 0, unsigned tun = 0, unsigned l_map = 1);
 
 public:
-    parameter(char *nm, double v_min, double v_max, unsigned n_steps);   // Creates a scan-type parameter
+    virtual ~parameter() = default;         // Recommended C++ practice, alas not needed here
     
-    parameter(char *nm, double v_min, double v_init, double v_max, parameter *eval_ptr, parameter *reject_ptr);
-                                            // creates a simulated annealing type
+    double get_cur_value() {return value;}; // returns the current value of the parameter
     
-    parameter(char *nm, class expression *expr); // creates an assignment type parameter
-    
-    static void reset();                    // Go back to initial state
-    static int  advance(unsigned &level);   // Advance to next value combination, returns != 0 when exhausted
+    virtual void    update() {};            // This must be called *before* the simulation step
+                                            // By default do nothing
+                                            
+    virtual void    initialize() {};        // Initializer: for looping parameters, like scan, etc.
+                                            // This will be called before the loop is executed for 
+                                            // the firest time
+                                            
+    virtual unsigned next() {return 1; };   // iterator: must be called after each loop iteration
+                                            // Returns 0 when the loop is not complete and 1 otherwise
+                                            
+    static parameter *find_parameter(const char *nm);   // find parameter by its name (symbol)
     
     static unsigned list_names(FILE *fp);   // adds names to file (preceeded by space, followed by nothing)
                                             // returns number of names listed
     static void list_c_val(FILE *fp);       // list the current values, like above
+};
 
-    static parameter *find_parameter(const char *nm);   // find parameter by its name (symbol)
-    double      get_cur_value();
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Derived classes 
+//
+
+class const_parameter : public parameter {
+public:
+    const_parameter (char *nm,
+                    double val,
+                    double v_min = __DBL_MAX__, double v_max = -__DBL_MAX__,
+                    unsigned npr = 0, unsigned tun = 0, unsigned l_map = 1);
     
-    static void enqueue_zero_op(expression *e_ptr); // Summation op to be zeroed
-    static void enqueue_fit_function(lsq_fit_function *f_ptr); // Fits to be updated
+    double get_mapped_value();              // Returns the value in [0,1] provided that a range is defined
+    void   set_mapped_value(double m_val);  // Does the reverse
+};
+
+class expr_parameter : public parameter {
+    expression      *expr;                  // Pointer to expression
+public:
+    expr_parameter (char *nm,
+                    expression  *expr,
+                    double v_min = __DBL_MAX__, double v_max = -__DBL_MAX__,
+                    unsigned npr = 0);
     
-    static unsigned open_sa_log_file(char *nm); // Opens a log file for the simulated annealing feature
-    static unsigned read_sa_schedule(char *nm); // Read the simulated annealing schedule
+    void            update() override;
+};
     
-    static unsigned sim_anneal_in_use() {return enable_sim_anneal;}
-    static void print_sa_results(FILE *sar_fp);
+class scan_parameter : public parameter {
+
+    unsigned        n_steps;                // #of n_steps
+    double          d_value;                // Step size
+    unsigned        step_cntr;              // Step counter
+
+public:
+    scan_parameter (char *nm,
+                    double v_min, double v_max, unsigned n_steps,
+                    unsigned npr = 0, unsigned l_map = 0);   // Creates a scan-type parameter
+
+    void initialize() override {step_cntr = 0;};
+    void update() override;
+    unsigned next() override {return ++step_cntr >= n_steps; };
 };

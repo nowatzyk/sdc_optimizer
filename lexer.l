@@ -48,6 +48,12 @@
 
 <IN_PRAGMA>"lsq_fit" { return LSQ_FIT; }
 
+<IN_PRAGMA>"no_print" { return NO_PRINT; }
+
+<IN_PRAGMA>"log_map" { return LOG_MAP; }
+
+<IN_PRAGMA>"tune"    { return TUNEABLE; }
+
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     
 <IN_PRAGMA>[a-zA-Z][a-zA-Z0-9_]* { yylval.text = strdup(yytext); return SYMBOL; }
@@ -57,7 +63,8 @@
                         return SYMBOL;
                     }
 
-<IN_PRAGMA>"="      { return ASSIGN; }
+<IN_PRAGMA>"="      { return EQUAL; }
+<IN_PRAGMA>":="     { return SET; }
 <IN_PRAGMA>"+"      { return PLUS; }
 <IN_PRAGMA>"-"      { return MINUS; }
 <IN_PRAGMA>"("      { return OPAR; }
@@ -74,6 +81,8 @@
 <IN_PRAGMA>"<="     { return COMP_LE; }
 <IN_PRAGMA>"<"      { return COMP_LT; }
 <IN_PRAGMA>"!"      { return NOT; }
+<IN_PRAGMA>"["      { return OSQB; }
+<IN_PRAGMA>"]"      { return CSQB; }
 
 <IN_PRAGMA>.        { fprintf(stderr, "Line %d: Unrecognized pragma character in *.cir file: '%s'\n", yylineno, yytext); } 
 
