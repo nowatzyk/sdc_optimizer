@@ -29,6 +29,7 @@ extern "C" {
 #include "spice_deck.h"
 #include "parser_interf.h"
 #include "anneal.h"
+#include "bo_optimizer.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -37,6 +38,7 @@ const char* cir_inp_path = "/tmp/JoSim2csv_analyzer.cir";      // Input fifo to 
                                             
 const char* EVAL_PARAMETER = "eval";        // Name of the evaluation expression
 const char* REJECT_PARAMETER = "reject";    // Keyword fo a reject functon (name of a parameter)
+const char* BAY_OPT_OBJECTIVE = "bo_objective"; // Keyword for baysian optimization objective function
 
 const char spice_escape = '~';              // Escape character in spice decks for parameter substitutions
 const unsigned spice_src_max_char = 1024;   // Max line length in spice source file
@@ -274,6 +276,12 @@ int main(int argc, char *argv[])
         sprintf(josim_output_buf, "%s_opt_params.txt", argv[1]);
         FILE *ofp = fopen(josim_output_buf, "w");
         parameter::save_result(ofp);
+        fclose(ofp);
+    } else if (baysian_opt != nullptr) {
+        baysian_opt->specify_summary_file(sum_fp);
+        sprintf(josim_output_buf, "%s_bo_params.txt", argv[1]);
+        FILE *ofp = fopen(josim_output_buf, "w");
+        baysian_opt->run(ofp);
         fclose(ofp);
     } else
         loop_complex.run_once(sum_fp);

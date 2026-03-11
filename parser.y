@@ -24,7 +24,7 @@ int yylex(void);
 %type <pointer> expr terminal range opt_range
 %type <flags> attribute attributes
 %token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB
-%token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE
+%token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT
 
 %left TEST_OP OTHERWISE
 %left COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
@@ -63,6 +63,8 @@ pragma_body:
     |   LSQ_FIT SYMBOL NUMBER COMMA expr COMMA expr  { define_lsq_fit($2, $3, $5, $7); }
     |   SIM_ANNEAL SYMBOL                   { define_sim_anneal($2); }
     |   SA_SCHEDULE NUMBER COMMA NUMBER     { define_add2SA_sched($2, $4); }
+    |   BAYSIAN_OPT                         { define_bo(190.0); }
+    |   BAYSIAN_OPT NUMBER                  { define_bo($2); }
     ;
     
 opt_range:                                  { $$ = NULL; }

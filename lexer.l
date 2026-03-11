@@ -41,6 +41,8 @@
 <IN_PRAGMA>"sim_anneal" { return SIM_ANNEAL; }
 <IN_PRAGMA>"sa_schedule" { return SA_SCHEDULE; }
 
+<IN_PRAGMA>"baysian_opt" { return BAYSIAN_OPT; }
+
 <IN_PRAGMA>"parameter" { return PARAMETER; }
 
 <IN_PRAGMA>"monitor" { return MONITOR; }

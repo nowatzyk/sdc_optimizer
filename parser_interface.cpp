@@ -23,6 +23,7 @@
 #include "spice_deck.h"
 #include "parameter.h"
 #include "anneal.h"
+#include "bo_optimizer.h"
 
 extern "C" {
 #include "parser_interf.h"
@@ -263,10 +264,14 @@ void define_param_scan(char *name, void *rng, double n_steps, unsigned flags)
 
 void define_sim_anneal(char *log_file_nm)
 {
-    // Note: add interlock with other high level optimizers: only one allowed at a time
-    
-    if (sim_anneal_ptr != nullptr) {
+   if (sim_anneal_ptr != nullptr) {
         fprintf(stderr, "Line %d: Multiple simulated annealing directives\n", yylineno);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    if (baysian_opt != nullptr) {
+        fprintf(stderr, "Line %d: Conflicts with Baysian optimization\n", yylineno);
         yy_n_parse_err++;
         return;
     }
@@ -279,6 +284,37 @@ void define_sim_anneal(char *log_file_nm)
     }
 
     sim_anneal_ptr = new sim_anneal(log_file_nm, ev_ptr, parameter::find_parameter(REJECT_PARAMETER));
+}
+
+void define_bo(double n_itr)
+{
+    if (baysian_opt != nullptr) {
+        fprintf(stderr, "Line %d: Multiple simulated baysian opt directives\n", yylineno);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    if (baysian_opt != nullptr) {
+        fprintf(stderr, "Line %d: Conflicts with simulated annealing\n", yylineno);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    if (n_itr < 1.0) {
+        fprintf(stderr, "Line %d: Bad number of iterations\n", yylineno);
+        yy_n_parse_err++;
+        return;
+    }
+    unsigned n = (unsigned) nearbyint(n_itr);
+    
+    parameter *of_ptr = parameter::find_parameter(BAY_OPT_OBJECTIVE);
+    if (nullptr == of_ptr) {
+        fprintf(stderr, "Line %d: '%s' paramter missing\n", yylineno, BAY_OPT_OBJECTIVE);
+        yy_n_parse_err++;
+        return;        
+    }
+    
+    baysian_opt = new BOOptimizer(of_ptr, n);
 }
 
 void define_add2SA_sched(double temp, double n_iter)
@@ -331,6 +367,10 @@ void define_snapshot(char *name, double start, double freq)
     snapshot_file_name  = name;
     snapshot_first      = (unsigned) s;
     snapshot_frequency  = (unsigned) f;
+}
+
+void define_bo()
+{
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

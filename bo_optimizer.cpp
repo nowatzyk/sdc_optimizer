@@ -20,8 +20,7 @@ using namespace std;
 // Statics
 //
 
-bool     BOOptimizer::configured   = false;
-unsigned BOOptimizer::n_iterations = 190;   // BayesOpt default
+BOOptimizer *baysian_opt = nullptr;         // Instance (really just an empty shell at this point)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -108,10 +107,13 @@ private:
 // BOOptimizer::configure() -- called from define_bo() pragma handler
 //
 
-void BOOptimizer::configure(unsigned n_iter)
+
+BOOptimizer::BOOptimizer(parameter *obf, unsigned n_it) :
+    configured(true),
+    n_iterations(n_it),
+    obj_funct(obf),
+    sum_fp(nullptr)
 {
-    n_iterations = n_iter;
-    configured   = true;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -119,7 +121,7 @@ void BOOptimizer::configure(unsigned n_iter)
 // BOOptimizer::run() -- called from main()
 //
 
-void BOOptimizer::run(FILE *result_fp, FILE *sum_fp)
+void BOOptimizer::run(FILE *result_fp)
 {
     assert(configured);
 

@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include "eval_cache.h"
+#include "parameter.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -32,12 +33,22 @@
 //
 
 class BOOptimizer {
-public:
-    static void configure(unsigned n_iter);         // called from pragma handler
-    static bool in_use()  { return configured; }
-    static void run(FILE *result_fp, FILE *sum_fp); // called from main()
+    //
+    // This is a place-holer at this point.
+    // Here is the place to store parameters extracted from the spice deck
+    //
+    bool        configured;
+    unsigned    n_iterations;
+    parameter   *obj_funct;                         // What to optimiza for (smaller is better)
+    FILE        *sum_fp;
 
-private:
-    static bool     configured;
-    static unsigned n_iterations;
+public:
+    BOOptimizer(parameter *obf, unsigned n_it = 190);
+
+    bool in_use()  { return configured; }
+    void run(FILE *result_fp);                      // called from main()
+
+    void specify_summary_file(FILE *sfp) {sum_fp = sfp;};
 };
+
+extern BOOptimizer *baysian_opt;                    // Pointer to instance when in use
