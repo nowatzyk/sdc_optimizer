@@ -1,10 +1,10 @@
 #include "geomean_expression.h"
 #include "loop_complex.h"
 
-geomean_expression::geomean_expression(expression *arg, LoopComplex &lc)
+geomean_expression::geomean_expression(expression *arg)
     : expression(stateful_func, arg), count(0)
 {
-    lc.register_stateful(this);
+    loop_complex.register_stateful(this);
 }
 
 void geomean_expression::update()

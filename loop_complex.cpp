@@ -1,6 +1,7 @@
 #include "loop_complex.h"
 #include "csv_analyzer.h"       // for lsq_fit_function
 #include "parameter.h"          // for update_assignments()
+#include "nodes_of_interest.h"
 #include "lsq_fit_function.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -11,15 +12,110 @@ LoopComplex loop_complex;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// LoopComplex -- construction
+// Run level
+//
+
+run_level::run_level(run_level* rl_ptr)
+    : looping_p_ptr(nullptr)
+{
+    if (rl_ptr == nullptr) {
+        // This is the bottom
+        level = 0;
+        below = nullptr;
+    } else {
+        level = rl_ptr->level + 1;
+        below = rl_ptr;
+    }
+}
+
+void run_level::run_this_level(FILE *sum_fp)
+    //
+    // This is primarily a recursive execution of a set of netsted loops. Each instance of
+    // run_level will execute one loop, which is defined by a looping parameter instance.
+    // The outermost/top-level loop is called, which in turn for each iteration will call the
+    // instance of the next level down until the iterator (parameter.next()) returns a 1
+    // which signals that the loop is complete.
+    // At the bottom, the actual JoSIM simulation is called, which terminates the recursion.
+    // Ideally, a level would be added only once a looping parameter is being defined. In this
+    // case a level is always associated with a looping parameter. However, that is problematic
+    // at the lowest level: for example parameters may be used to just configure a circuit
+    // whithout any looping. Running a single simulation should be practical. So instead of
+    // having specialized 0-level, a level may have no looping at all. This allows the construction
+    // of an empty run_level instance that just runs the simulation and does nothing else.
+    // Everything else is added later.
+    //
+{
+        for (auto *lp : lsq_f_ptrs )  lp->initialize();
+        for (auto *ep : s_expr_ptrs)  ep->initialize();
+        
+        if (looping_p_ptr != nullptr)
+            looping_p_ptr->initialize();    // If there is a looping contruct, initialize it
+            
+        do {
+            for (auto *pp : p_updt_ptrs)  pp->update();
+            
+            if (below != nullptr)
+                below->run_this_level(sum_fp);    // recursively execute all looping levels
+            else
+                run_josim();                // Run the JoSIM simulator
+                
+            for (auto *ep : s_expr_ptrs)  ep->update();
+            for (auto *lp : lsq_f_ptrs )  lp->add_datum();
+            
+            if (below == nullptr) {
+                //
+                // This is the bottom/innnermost/lowest level that does the reporting
+                // for each JoSIM run
+                //
+                parameter::list_c_val(sum_fp);
+                fprintf(sum_fp, " 0\n");
+                n_josim_runs++;             // Done with this run
+            }
+            
+        } while ((looping_p_ptr != nullptr) && (looping_p_ptr->next() == 0));
+            
+        for (auto *ep : s_expr_ptrs)  ep->finalize();
+        for (auto *lp : lsq_f_ptrs )  lp->finalize();
+        
+        parameter::list_c_val(sum_fp);
+        fprintf(sum_fp, " %u\n", level + 1);
+}
+
+void run_level::add_looping_param(parameter* p_ptr)
+{
+    assert(looping_p_ptr == nullptr);       // Make sure that this is done only once!
+    
+    looping_p_ptr = p_ptr;
+    p_updt_ptrs.push_back(p_ptr);           // Note: looping parameters usually need updating too,
+                                            //       so this takes care of it. No seperate registration
+                                            //       required.
+}
+
+void run_level::add_s_expr(StatefulExpression* se_ptr)
+{
+    s_expr_ptrs.push_back(se_ptr);
+}
+
+void run_level::add_param(parameter* p_ptr)
+{
+    p_updt_ptrs.push_back(p_ptr);
+}
+
+void run_level::add_lsq_fit(lsq_fit_function* lf_ptr)
+{
+    lsq_f_ptrs.push_back(lf_ptr);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// LoopComplex
+//
+// This is basically just a warpper arround the run level core
 //
 
 LoopComplex::LoopComplex()
-    : eval_expr(nullptr)
-    , run_josim_cb(nullptr)
-    , post_run_cb(nullptr)
-    , current_level(0)
 {
+    run_level_ptr = new run_level(nullptr);     // Creates the bottom level / innermost loop
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -27,151 +123,34 @@ LoopComplex::LoopComplex()
 // Registration
 //
 
-void LoopComplex::register_iterator(LoopIterator *it)
+void LoopComplex::register_stateful(StatefulExpression *se)
 {
-    assert(it);
-    it->level = current_level++;    // post-increment: iterator owns this level
-                                    // subsequently registered stateful objects get higher level
-    iterators.push_back(it);
+    assert(se);
+    run_level_ptr->add_s_expr(se);
 }
 
-void LoopComplex::register_stateful(StatefulExpression *s)
+void LoopComplex::register_lsq_fit(lsq_fit_function *lf)
 {
-    assert(s);
-    s->level = current_level;       // level at time of registration = innermost active loop
-    stateful.push_back(s);
+    assert(lf);
+    run_level_ptr->add_lsq_fit(lf);
 }
 
-void LoopComplex::register_lsq_fit(lsq_fit_function *f)
+void LoopComplex::register_parameter(parameter* pp, unsigned int is_looping)
 {
-    assert(f);
-    f->level = current_level;
-    lsq_fits.push_back(f);
-}
-
-unsigned LoopComplex::n_optimizable_params() const
-{
-    // Delegate to parameter class for now; will move here during parameter strip-down
-    unsigned n = 0;
-    for (auto *it : iterators)
-        (void)it;   // placeholder -- iterators don't expose optimizable flag yet
-    // For SA/BO, the count comes from parameter::p_ptr.size()
-    // This will be revisited when parameter is refactored
-    return (unsigned) iterators.size();
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// Lifecycle helpers
-//
-
-void LoopComplex::initialize_level(unsigned lv)
-{
-    for (auto *s : stateful)
-        if (s->level == lv) s->initialize();
-    for (auto *f : lsq_fits)
-        if (f->level == lv) f->initialize();
-}
-
-void LoopComplex::finalize_level(unsigned lv)
-{
-    // StatefulExpressions always before LsqFits: fits may depend on finalized expression values
-    for (auto *s : stateful)
-        if (s->level == lv) s->finalize();
-    for (auto *f : lsq_fits)
-        if (f->level == lv) f->finalize();
-}
-
-void LoopComplex::update_all()
-{
-    for (auto *s : stateful)
-        s->update();
-    for (auto *f : lsq_fits)
-        f->add_datum();
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// run_once() -- the evaluation oracle
-//
-// Executes the full nested loop, running JoSIM at each innermost point.
-// Returns eval_expr->get_value() after the outermost loop completes,
-// or NaN if no eval_expr is defined.
-//
-// Level convention: level 0 = innermost, level N-1 = outermost.
-// iterators[] is in registration order, outermost first (highest index = level 0).
-//
-// Finalization order at each level:
-//   StatefulExpressions finalize before LsqFits (separate vectors ensure this).
-//
-
-double LoopComplex::run_once()
-{
-    assert(run_josim_cb != nullptr);
-
-    const unsigned n_levels = (unsigned) iterators.size();
-
-    // --- Single pass if no iterators (plain expression evaluation) ---
-    if (n_levels == 0) {
-        for (auto *s : stateful)  s->initialize();
-        for (auto *f : lsq_fits)  f->initialize();
-
-// TBD        parameter::update_assignments();
-        run_josim_cb();
-        update_all();
-
-        for (auto *s : stateful)  s->finalize();
-        for (auto *f : lsq_fits)  f->finalize();
-
-        if (post_run_cb) post_run_cb();
-
-        return eval_expr ? eval_expr->get_value() : NAN;
+    assert((pp != nullptr) && (is_looping <= 1));
+    
+    if (is_looping == 0)
+        run_level_ptr->add_param(pp);
+    else {
+        // Note: each level can have only one looping parameter
+        if (run_level_ptr->is_looping() != 0)
+            // Already has a looping parameter, so a new level is needed
+            run_level_ptr = new run_level(run_level_ptr);
+        run_level_ptr->add_looping_param(pp);
     }
+}
 
-    // --- Initialize all levels outermost -> innermost ---
-    for (unsigned lv = 0; lv < n_levels; lv++)
-        iterators[lv]->initialize();
-    for (unsigned lv = 0; lv < n_levels; lv++)
-        initialize_level(lv);
-
-    // --- Inner simulation loop ---
-    for (;;) {
-// TBD        parameter::update_assignments();
-        run_josim_cb();
-        update_all();
-
-        if (post_run_cb) post_run_cb();
-
-        // --- Advance levels innermost (index 0) -> outermost ---
-        bool advanced = false;
-        for (unsigned lv = 0; lv < n_levels; lv++) {
-            if (iterators[lv]->next()) {
-                // This level has more steps: restart all inner levels
-                for (unsigned inner = 0; inner < lv; inner++) {
-                    finalize_level(inner);
-                    iterators[inner]->initialize();
-                    initialize_level(inner);
-                }
-                advanced = true;
-                break;
-            }
-
-            // Level lv exhausted: finalize it
-            finalize_level(lv);
-
-            if (lv == n_levels - 1) {
-                // Outermost level done: entire loop complete
-                return eval_expr ? eval_expr->get_value() : NAN;
-            }
-            // Continue to try advancing the next outer level
-        }
-
-        if (!advanced) {
-            // No iterators advanced -- shouldn't happen with n_levels > 0
-            // but guard against it
-            break;
-        }
-    }
-
-    return eval_expr ? eval_expr->get_value() : NAN;
+void LoopComplex::run_once(FILE *sum_fp)
+{
+    run_level_ptr->run_this_level(sum_fp);
 }

@@ -9,9 +9,9 @@
 class geomean_expression : public expression, public StatefulExpression {
     unsigned count;
 public:
-    geomean_expression(expression *arg, LoopComplex &lc);
+    geomean_expression(expression *arg);
     void   initialize() override { value = 0.0; count = 0; }
     void   update()     override;
     void   finalize()   override { }
-    double get_value()  override { return count ? exp(value / count) : NAN; }
+    double get_value()  override { return (count > 0) ? exp(value / count) : NAN; }
 };

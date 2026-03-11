@@ -1,10 +1,10 @@
 #include "sum_expression.h"
 #include "loop_complex.h"
 
-sum_expression::sum_expression(expression *arg, LoopComplex &lc)
+sum_expression::sum_expression(expression *arg)
     : expression(stateful_func, arg)
 {
-    lc.register_stateful(this);
+    loop_complex.register_stateful(this);
 }
 
 void sum_expression::update()

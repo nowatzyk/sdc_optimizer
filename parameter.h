@@ -8,28 +8,9 @@
 #include <vector>
 
 class expression;                           // Forward declaration (instead of pulling in the expression.h file)
-
-#define _ADAPTIVE_RANGEING_                 // If defined, the change scale is adjusted
-                                            // individually for each parameter
-const double MIN_RANGE = 1.0e-6;            // Min. parameter change range
-extern const char*  EVAL_PARAMETER;         // The evaluation function parameter
-
-#define REJ_MAX     20                      // #of rejects before reducing change scale
-                                            //   in simulated annealing
-
-#define MAX_RESET   1000                    // patience factor: if opt wasn't improved in this
-                                            // many steps, reset to optimum
-
-#define MAX_CHANGE_TRIES 50                 // #of times a parameter change can be rejected
-
-#define EPS         1.0e-10                 // Greedy search cut-off
+class sim_anneal;                           // dito
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-
-struct an_sched {                           // annealing schedule
-    double          temp;                   // Starting temp for this phase
-    unsigned        n_steps;                // #of steps
-};
 
 class parameter {
 protected:
@@ -79,6 +60,10 @@ public:
     static unsigned list_names(FILE *fp);   // adds names to file (preceeded by space, followed by nothing)
                                             // returns number of names listed
     static void list_c_val(FILE *fp);       // list the current values, like above
+    
+    static void sa_p_export(sim_anneal *sa_ptr); // Export all tunable paramters to the
+                                            // simulated annealing subsystem
+    char *get_name() {return name;};
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -95,6 +80,8 @@ public:
     
     double get_mapped_value();              // Returns the value in [0,1] provided that a range is defined
     void   set_mapped_value(double m_val);  // Does the reverse
+    
+    void   print_self(FILE *fp);            // Prints a version of itself
 };
 
 class expr_parameter : public parameter {

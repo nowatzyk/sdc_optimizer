@@ -22,6 +22,7 @@
 #include "nodes_of_interest.h"
 #include "spice_deck.h"
 #include "parameter.h"
+#include "anneal.h"
 
 extern "C" {
 #include "parser_interf.h"
@@ -260,28 +261,42 @@ void define_param_scan(char *name, void *rng, double n_steps, unsigned flags)
     new scan_parameter(name, v_min, v_max, n, flags & 1, (flags >> 1) & 1);
 }
 
-void define_sim_anneal(char *name, double v_min, double v_init, double v_max)
+void define_sim_anneal(char *log_file_nm)
 {
-    if (parameter::find_parameter(name)) {
-        fprintf(stderr, "Line %d: duplicate parameter definition for '%s'\n",
-                yylineno, name);
+    // Note: add interlock with other high level optimizers: only one allowed at a time
+    
+    if (sim_anneal_ptr != nullptr) {
+        fprintf(stderr, "Line %d: Multiple simulated annealing directives\n", yylineno);
         yy_n_parse_err++;
         return;
     }
-    if ((v_min >= v_init) || (v_init >= v_max)) {
-        fprintf(stderr, "Line %d: v_min < v_init < v_max not true\n", yylineno);
+    
+    parameter *ev_ptr = parameter::find_parameter(EVAL_PARAMETER);
+    if (nullptr == ev_ptr) {
+        fprintf(stderr, "Line %d: '%s' paramter missing\n", yylineno, EVAL_PARAMETER);
+        yy_n_parse_err++;
+        return;        
+    }
+
+    sim_anneal_ptr = new sim_anneal(log_file_nm, ev_ptr, parameter::find_parameter(REJECT_PARAMETER));
+}
+
+void define_add2SA_sched(double temp, double n_iter)
+{
+    if (sim_anneal_ptr == nullptr) {
+        fprintf(stderr, "Line %d: Define simulated annealing first\n", yylineno);
         yy_n_parse_err++;
         return;
     }
-    parameter *eval_ptr = parameter::find_parameter(EVAL_PARAMETER);
-    if (!eval_ptr) {
-        fprintf(stderr, "Line %d: parameter '%s' must be defined first\n",
-                yylineno, EVAL_PARAMETER);
+    
+    if ((temp < 0.0) || (n_iter < 1.0)) {
+        fprintf(stderr, "Line %d: temerature < 0 or #of steps < 1\n", yylineno);
         yy_n_parse_err++;
         return;
     }
-    parameter *reject_ptr = parameter::find_parameter(REJECT_PARAMETER);
-    // TBD
+    
+    unsigned n = (unsigned) nearbyint(n_iter);
+    sim_anneal_ptr->add_sa_sched(temp, n);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -373,11 +388,11 @@ void *define_function1(char *name, void *x)
         if (func1_tab[i].func1_ptr == nullptr) {
             // Stateful expression: dispatch by name
             expression *arg = (expression *) x;
-            if      (!strcmp(name, "Sum"))     return new sum_expression    (arg, loop_complex);
-            else if (!strcmp(name, "Avg"))     return new avg_expression    (arg, loop_complex);
-            else if (!strcmp(name, "Min"))     return new min_expression    (arg, loop_complex);
-            else if (!strcmp(name, "Max"))     return new max_expression    (arg, loop_complex);
-            else if (!strcmp(name, "Geomean")) return new geomean_expression(arg, loop_complex);
+            if      (!strcmp(name, "Sum"))     return new sum_expression    (arg);
+            else if (!strcmp(name, "Avg"))     return new avg_expression    (arg);
+            else if (!strcmp(name, "Min"))     return new min_expression    (arg);
+            else if (!strcmp(name, "Max"))     return new max_expression    (arg);
+            else if (!strcmp(name, "Geomean")) return new geomean_expression(arg);
             else { assert(0); return nullptr; }
         }
 

@@ -4,33 +4,40 @@
 #include <cassert>
 #include <cmath>
 #include "expression.h"
+#include "parameter.h"
 
 using namespace std;
 
-class lsq_fit_function;     // forward declaration
+class lsq_fit_function;                     // forward declaration
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// LoopIterator -- abstract base for iteration strategies.
-//
-// Each iterator owns one parameter and knows how to step through its range.
-// Stepping is done in normalised [0,1] space; the parameter's to_physical()
-// handles log/linear mapping.  Level 0 = innermost loop.
-//
-// Concrete subclasses (ScanIterator, BinarySearchIterator) are registered
-// with LoopComplex at parse time from their constructors.
+// Run level: This class runs the actual simulation
 //
 
-class LoopIterator {
+class run_level {
+    unsigned        level;                  // advisory / debugging
+    parameter       *looping_p_ptr;         // Optional looping parameter
+    
+    vector <lsq_fit_function *> lsq_f_ptrs; // LSQ fits that belong to this level
+    vector <StatefulExpression *> s_expr_ptrs; // Stateful expressions that belong to this level
+    vector <parameter *> p_updt_ptrs;       // Parameter update pointers
+    
+    run_level       *below;                 // The next run level below this one or nullptr
+    
 public:
-    unsigned    level;          // 0 = innermost; set by LoopComplex::register_iterator()
-
-    virtual void initialize() = 0;  // set parameter to first value, reset counters
-    virtual bool next()       = 0;  // advance to next value; return false when exhausted
-    virtual ~LoopIterator()   = default;
-
-protected:
-    LoopIterator() : level(0) {}
+    run_level(run_level *rl_ptr = nullptr); // constructor: meant to recursively contruct the
+                                            // the loop control structure
+    
+    unsigned        is_looping ()           // Just a test if the current top level is executed more than once
+                    {return (looping_p_ptr != nullptr);};
+    
+    void            add_looping_param(parameter *p_ptr);
+    void            add_s_expr(StatefulExpression *se_ptr);
+    void            add_lsq_fit(lsq_fit_function *lf_ptr);
+    void            add_param(parameter *p_ptr);
+    
+    void            run_this_level(FILE *sum_fp);  // Execute this level
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -42,67 +49,27 @@ protected:
 // always enforced: StatefulExpressions finalize before LsqFits at each level.
 //
 // run_once() executes the full nested loop, running JoSIM at each innermost
-// point, and returns the value of eval_expr (or NaN if none is defined).
-//
-// The global instance is defined in loop_complex.cpp and declared extern here
-// so that parser-side factory functions (define_function1 etc.) can reach it.
+// point. The results of this computation is avalable as updated values in
+// the parameters: constant parameters may be updated by outer optimizers
+// and expression-type parameters will be set to the result of the smulation.
 //
 
 class LoopComplex {
+    
+    run_level       *run_level_ptr;         // Points to the top level      
+
 public:
     LoopComplex();
 
     //
     // Registration -- called from constructors at parse time
     //
-    void register_iterator  (LoopIterator       *it);   // increments current_level
-    void register_stateful  (StatefulExpression  *s);   // captures current_level
-    void register_lsq_fit   (lsq_fit_function    *f);   // captures current_level; finalized after stateful
 
-    unsigned current_nesting_level() const { return current_level; }
+    void register_stateful  (StatefulExpression  *se);   // captures current_level
+    void register_parameter (parameter *pp, unsigned is_looping = 0);   // Registers a parameter
+    void register_lsq_fit   (lsq_fit_function    *lf);   // captures current_level; finalized after stateful
 
-    //
-    // eval_expr -- the expression whose value run_once() returns.
-    // Set by the parser when it encounters the "eval" pragma.
-    // nullptr is valid: run_once() returns NaN in that case (plain sweep mode).
-    //
-    expression *eval_expr;
-
-    //
-    // run_once() -- execute the full nested loop and return eval_expr->get_value().
-    //
-    // Calls the JoSIM subprocess indirectly via the circuit / fifo machinery
-    // that lives in main.cpp.  The boundary between LoopComplex and main is
-    // the two callbacks below, which main sets before calling run_once().
-    //
-    // Returns NaN if no eval_expr is defined.
-    //
-    double run_once();
-
-    //
-    // Callbacks into main for the operations LoopComplex cannot do itself.
-    // Must be set before run_once() is called.
-    //
-    void (*run_josim_cb)()   = nullptr;  // writes cir file, forks JoSIM, reads CSV, waits
-    void (*post_run_cb)()    = nullptr;  // any post-run bookkeeping main needs (e.g. list_c_val)
-
-    //
-    // n_optimizable_params() -- count of parameters eligible for SA/BO perturbation.
-    // Used by Optimizer to size the EvalCache.
-    //
-    unsigned n_optimizable_params() const;
-
-private:
-    vector<LoopIterator*>      iterators;   // in registration order (outermost first)
-    vector<StatefulExpression*> stateful;   // expressions: sum, avg, min, max, geomean
-    vector<lsq_fit_function*>  lsq_fits;   // finalized after stateful at each level
-
-    unsigned current_level;                 // incremented each time an iterator registers
-
-    // Lifecycle helpers called by run_once()
-    void initialize_level   (unsigned lv);
-    void finalize_level     (unsigned lv);
-    void update_all         ();
+    void run_once(FILE *sum_fp);            // Perform a simulation run (incl. all looping and the kitchen sink
 };
 
 //

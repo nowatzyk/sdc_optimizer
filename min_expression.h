@@ -7,7 +7,7 @@
 //
 class min_expression : public expression, public StatefulExpression {
 public:
-    min_expression(expression *arg, LoopComplex &lc);
+    min_expression(expression *arg);
     void initialize() override { value = NAN; }
     void update()     override;
     void finalize()   override { }

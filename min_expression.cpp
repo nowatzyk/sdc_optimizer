@@ -1,11 +1,11 @@
 #include "min_expression.h"
 #include "loop_complex.h"
 
-min_expression::min_expression(expression *arg, LoopComplex &lc)
+min_expression::min_expression(expression *arg)
     : expression(stateful_func, arg)
 {
     value = NAN;
-    lc.register_stateful(this);
+    loop_complex.register_stateful(this);
 }
 
 void min_expression::update()

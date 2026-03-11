@@ -8,7 +8,7 @@
 //
 class sum_expression : public expression, public StatefulExpression {
 public:
-    sum_expression(expression *arg, LoopComplex &lc);
+    sum_expression(expression *arg);
     void initialize() override { value = 0.0; }
     void update()     override;
     void finalize()   override { }

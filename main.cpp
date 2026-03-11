@@ -28,6 +28,7 @@ extern "C" {
 #include "nodes_of_interest.h"
 #include "spice_deck.h"
 #include "parser_interf.h"
+#include "anneal.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -53,6 +54,176 @@ char josim_output_buf[max_ln_length];       // Where to put the output from Josi
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
+// The core simulation function
+//
+
+void run_josim()
+{
+    //
+    // Do the actual work:
+    //   1. Run JoSIM with the edited circuit file
+    //   2. Digest the JoSim output
+    //
+    
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    //  1   Run JoSim                                                                            //
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    pid_t child_pid = fork();
+    if (child_pid == 0) {
+        //
+        // This is the child process
+        //
+        freopen("run.log", "w", stdout);    // Keep this file for debugging purposes
+        
+        int ie = execl("/usr/local/bin/josim-cli", "-a", "1", "-o", csv_out_path, cir_inp_path, nullptr);
+        
+        fprintf(stderr, "execl failed with return of %d\n", ie);
+        perror("Failed to stat Josim");
+        exit(1);
+    }
+    
+    if (circuit.write_cir_file(cir_inp_path)) {
+        fprintf(stderr, "failed to write the spice deck to JoSim\n");
+        exit(1);
+    }
+    
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    //  2   Parse the output from JoSim                                                          //
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    FILE *inpf = fopen(csv_out_path, "r");
+    assert(inpf != nullptr);
+        
+    FILE *snap_of = nullptr;
+    if ((snapshot_file_name != nullptr) && (n_josim_runs >= snapshot_first) &&
+        ( ((n_josim_runs - snapshot_first) % snapshot_frequency) == 0)         ) {
+        //
+        // Time to take a snapshot
+        //
+        sprintf(josim_output_buf, "%s_%u.csv", snapshot_file_name, n_josim_runs);
+        snap_of = fopen(josim_output_buf, "w");
+        assert(snap_of);
+    }
+
+    //
+    // Process first line of CVS file
+    //
+    if (!fgets(josim_output_buf, max_ln_length - 1, inpf) ||
+        strlen(josim_output_buf) > (max_ln_length -4)) {            // Meant to detect buffer overflow
+        fprintf(stderr, "Failed to read first line\n");
+        exit(1);
+    }
+
+    if (snap_of != nullptr) fputs(josim_output_buf, snap_of);       // Copy first line to snapshot file
+        
+    char *buf_p;
+    {
+        //
+        // Discard white space and doublle quotes
+        //
+        char *tmp = josim_output_buf;
+        for (buf_p = josim_output_buf; *buf_p; buf_p++)
+            if ((*buf_p != '"') && (*buf_p != ' ') && (*buf_p != '\t') && (*buf_p != '\n'))
+                *tmp++ = *buf_p;
+         *tmp = 0;
+    }
+    
+    buf_p = josim_output_buf;
+    for (unsigned ic = 0; 1; ic++) {
+        char *tmp = buf_p;
+        while (*tmp && (*tmp != ',')) tmp++;    // Find end of string
+        int last = !*tmp;       // Set if this is the last colun
+        *tmp = 0;               // Replance comma with 0
+        //
+        // buf_p is now pointing to the name string for this column
+        //
+        nodes_of_interest *noi_ptr = nodes_of_interest::find(buf_p);
+        if (n_josim_runs == 0) {
+            // First Josim run: allocate the ts for the NOI's
+            if (noi_ptr == nullptr) {
+                // Don't care about this column
+                josim_out_columns.push_back(nullptr);
+            } else {
+                josim_out_columns.push_back(new time_series());
+                if (noi_ptr->set_col_index(ic)) {
+                    fprintf(stderr, "Josim output has multiple columns named '%s'\n", tmp);
+                    exit(1);
+                }
+            }
+        } else {
+            // Verify that the column order is the same as the first running
+            if (noi_ptr != nullptr) {
+                if (ic != noi_ptr->get_col_index()) {
+                    fprintf(stderr, "Josim run %u: column order has changed\n", n_josim_runs + 1);
+                    exit(1);
+                }
+                josim_out_columns[ic]->reset();         // Reset the TS to accept new data
+            }
+        }
+            
+        if (last) {
+            if (n_josim_runs == 0) {
+                printf("Detected %lu columns\n", josim_out_columns.size());
+            }
+            break;
+        }
+            
+        buf_p = tmp + 1;
+    }
+        
+    if (n_josim_runs == 0) {
+        // Verify that all NOI's are defined
+        nodes_of_interest *n_ptr = nodes_of_interest::find_undef();
+        if (n_ptr != nullptr) {
+            fprintf(stderr, "Node of interest '%s' not found in Josim output\n", n_ptr->get_name());
+            exit(1);
+        }
+    }
+
+    //
+    // Now read the data (in CSV format)
+    //
+    int line_no = 1;
+    do {
+        line_no++;
+        if (!fgets(josim_output_buf, max_ln_length - 1, inpf))
+            break;                             // Input file exhausetd
+        if (snap_of != nullptr) fputs(josim_output_buf, snap_of);       // Copy a row to the snapshot file
+        buf_p = josim_output_buf;
+        double val;
+        int nc;
+        for (int i = 0; i < josim_out_columns.size(); i++) {
+            if (1 > sscanf(buf_p,"%lf%n", &val, &nc)) {
+                fprintf(stderr, "Josim run %u: Failed to digest line %d\n", n_josim_runs + 1, line_no);
+                exit(1);
+            }
+            if (i == 0) {
+                // Verify time column
+                if (fabs(val - sim_time((double)(line_no - 2))) > 0.1e-12) {
+                    fprintf(stderr, "Josim output on line %d: time expected %.10lg time found %.10lg\n",
+                            line_no, sim_time((double)(line_no - 2)), val);
+                    exit(1);
+                }
+            }
+            if (josim_out_columns[i] != nullptr)
+                josim_out_columns[i]->add_datum(val);   // Selectively add data
+            buf_p += nc +1;
+        }
+    } while (1);
+        
+    fclose(inpf);
+    if (snap_of != nullptr) {               // Close the snapshot file (if there was one)
+        fclose(snap_of);
+        snap_of = nullptr;
+    }
+        
+    int status;
+    waitpid(child_pid, &status, 0);         // reap the child process
+    
+    if (n_josim_runs == 0) printf("Read %d rows of data, exit status=%d\n", line_no, status);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
 // The main program
 //
 
@@ -71,206 +242,41 @@ int main(int argc, char *argv[])
         exit(1);
     }
     
-    if ((argc < 2) || (argc > 4)) {
-        fprintf(stderr, "csv_analyzer <base-file-name> [<sa_schedule> [<sa_log_file>]]\n");
+    if (argc != 2) {
+        fprintf(stderr, "csv_analyzer <base-file-name>\n");
         exit(1);
     }
     
     sprintf(josim_output_buf, "%s.cir", argv[1]);
     if (1 > circuit.read_cir_file(josim_output_buf)) {
-        fprintf(stderr, "Failed to read spice deck from '%s'\n", argv[1]);
+        fprintf(stderr, "Failed to read spice deck from '%s' \n", josim_output_buf);
         exit(1);
     }
-         
     sprintf(josim_output_buf, "%s_sum.dat", argv[1]);
     FILE *sum_fp = fopen(josim_output_buf, "w");
     assert(sum_fp != nullptr);
     fprintf(sum_fp, "#");
     fprintf(sum_fp, " (%u):level\n", parameter::list_names(sum_fp));
 
+    if (sim_anneal_ptr != nullptr) {
+        parameter::sa_p_export(sim_anneal_ptr);
+        printf("Simulated Annealing to optimize %u parameters in %lu steps\n",
+               sim_anneal_ptr->n_tune(), sim_anneal_ptr->n_steps());
+        sim_anneal_ptr->specify_summary_file(sum_fp);
+    }
+    
+
     //
     // Initialization and setup done.
     //
-    while (1) {
-        //
-        // Do the actual work:
-        //   1. Run JoSIM with the edited circuit file
-        //   2. Digest the JoSim output
-        //   3. Analyze the result
-        //   4. Repeat with different parameter values
-        //
-        
-        ///////////////////////////////////////////////////////////////////////////////////////////
-        //  1   Run JoSim                                                                            //
-        ///////////////////////////////////////////////////////////////////////////////////////////
-        pid_t child_pid = fork();
-        if (child_pid == 0) {
-            //
-            // This is the child process
-            //
-            freopen("run.log", "w", stdout);    // Keep this file for debugging purposes
-        
-            int ie = execl("/usr/local/bin/josim-cli", "-a", "1", "-o", csv_out_path, cir_inp_path, nullptr);
-            perror("Failed to stat Josim");
-            exit(1);
-        }
-    
-        if (circuit.write_cir_file(cir_inp_path)) {
-            fprintf(stderr, "failed to write the spice deck to JoSim\n");
-            exit(1);
-        }
-    
-        ///////////////////////////////////////////////////////////////////////////////////////////
-        //  2   Parse the output from JoSim                                                          //
-        ///////////////////////////////////////////////////////////////////////////////////////////
-        FILE *inpf = fopen(csv_out_path, "r");
-        assert(inpf != nullptr);
-        
-        FILE *snap_of = nullptr;
-        if ((snapshot_file_name != nullptr) && (n_josim_runs >= snapshot_first) &&
-            ( ((n_josim_runs - snapshot_first) % snapshot_frequency) == 0)         ) {
-            //
-            // Time to take a snapshot
-            //
-            sprintf(josim_output_buf, "%s_%u.csv", snapshot_file_name, n_josim_runs);
-            snap_of = fopen(josim_output_buf, "w");
-            assert(snap_of);
-        }
-
-        //
-        // Process first line of CVS file
-        //
-        if (!fgets(josim_output_buf, max_ln_length - 1, inpf) ||
-            strlen(josim_output_buf) > (max_ln_length -4)) {            // Meant to detect buffer overflow
-            fprintf(stderr, "Failed to read first line\n");
-            exit(1);
-        }
-
-        if (snap_of != nullptr) fputs(josim_output_buf, snap_of);       // Copy first line to snapshot file
-        
-        char *buf_p;
-        {
-            //
-            // Discard white space and doublle quotes
-            //
-            char *tmp = josim_output_buf;
-            for (buf_p = josim_output_buf; *buf_p; buf_p++)
-                if ((*buf_p != '"') && (*buf_p != ' ') && (*buf_p != '\t') && (*buf_p != '\n'))
-                    *tmp++ = *buf_p;
-            *tmp = 0;
-        }
-    
-        buf_p = josim_output_buf;
-        for (unsigned ic = 0; 1; ic++) {
-            char *tmp = buf_p;
-            while (*tmp && (*tmp != ',')) tmp++;    // Find end of string
-            int last = !*tmp;       // Set if this is the last colun
-            *tmp = 0;               // Replance comma with 0
-            //
-            // buf_p is now pointing to the name string for this column
-            //
-            nodes_of_interest *noi_ptr = nodes_of_interest::find(buf_p);
-            if (n_josim_runs == 0) {
-                // First Josim run: allocate the ts for the NOI's
-                if (noi_ptr == nullptr) {
-                    // Don't care about this column
-                    josim_out_columns.push_back(nullptr);
-                } else {
-                    josim_out_columns.push_back(new time_series());
-                    if (noi_ptr->set_col_index(ic)) {
-                        fprintf(stderr, "Josim output has multiple columns named '%s'\n", tmp);
-                        exit(1);
-                    }
-                }
-            } else {
-                // Verify that the column order is the same as the first running
-                if (noi_ptr != nullptr) {
-                    if (ic != noi_ptr->get_col_index()) {
-                        fprintf(stderr, "Josim run %u: column order has changed\n", n_josim_runs + 1);
-                        exit(1);
-                    }
-                    josim_out_columns[ic]->reset();         // Reset the TS to accept new data
-                }
-            }
-            
-            if (last) {
-                if (n_josim_runs == 0) {
-                    printf("Detected %lu columns\n", josim_out_columns.size());
-                }
-                break;
-            }
-            
-            buf_p = tmp + 1;
-        }
-        
-        if (n_josim_runs == 0) {
-            // Verify that all NOI's are defined
-            nodes_of_interest *n_ptr = nodes_of_interest::find_undef();
-            if (n_ptr != nullptr) {
-                fprintf(stderr, "Node of interest '%s' not found in Josim output\n", n_ptr->get_name());
-                exit(1);
-            }
-        }
-
-        //
-        // Now read the data (in CSV format)
-        //
-        int line_no = 1;
-        do {
-            line_no++;
-            if (!fgets(josim_output_buf, max_ln_length - 1, inpf))
-                break;                             // Input file exhausetd
-            if (snap_of != nullptr) fputs(josim_output_buf, snap_of);       // Copy a row to the snapshot file
-            buf_p = josim_output_buf;
-            double val;
-            int nc;
-            for (int i = 0; i < josim_out_columns.size(); i++) {
-                if (1 > sscanf(buf_p,"%lf%n", &val, &nc)) {
-                    fprintf(stderr, "Josim run %u: Failed to digest line %d\n", n_josim_runs + 1, line_no);
-                    exit(1);
-                }
-                if (i == 0) {
-                    // Verify time column
-                    if (fabs(val - sim_time((double)(line_no - 2))) > 0.1e-12) {
-                        fprintf(stderr, "Josim output on line %d: time expected %.10lg time found %.10lg\n",
-                                line_no, sim_time((double)(line_no - 2)), val);
-                        exit(1);
-                    }
-                }
-                if (josim_out_columns[i] != nullptr)
-                    josim_out_columns[i]->add_datum(val);   // Selectively add data
-                buf_p += nc +1;
-            }
-        } while (1);
-        
-        fclose(inpf);
-        if (snap_of != nullptr) {               // Close the snapshot file (if there was one)
-            fclose(snap_of);
-            snap_of = nullptr;
-        }
-        
-        int status;
-        waitpid(child_pid, &status, 0);         // reap the child process
-    
-        if (n_josim_runs == 0) printf("Read %d rows of data, exit status=%d\n", line_no, status);
-
-        
-        ///////////////////////////////////////////////////////////////////////////////////////////
-        // 3 Analyze the simulation results                                                      // 
-        ///////////////////////////////////////////////////////////////////////////////////////////
-        //
-        // Analysis is primarily done via parameter expressions
-        //
-//        nodes_of_interest::print_all();
-        parameter::list_c_val(sum_fp);
-
-        unsigned level;
-        n_josim_runs++;                         // Done with this run
-
-        fprintf(sum_fp, " %u\n", level);
-        
-
-    }
+    if (sim_anneal_ptr != nullptr) {
+        sim_anneal_ptr->optimize();
+        sprintf(josim_output_buf, "%s_opt_params.txt", argv[1]);
+        FILE *ofp = fopen(josim_output_buf, "w");
+        sim_anneal_ptr->save_result(ofp);
+        fclose(ofp);
+    } else
+        loop_complex.run_once(sum_fp);
     
     fclose(sum_fp);
 

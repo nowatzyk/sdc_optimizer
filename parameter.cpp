@@ -12,6 +12,8 @@ using namespace std;
 
 #include "parameter.h"
 #include "expression.h"
+#include "loop_complex.h"
+#include "anneal.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -73,6 +75,17 @@ void parameter::list_c_val(FILE* fp)
             parameters[i]->print_value(fp);
 }
 
+void parameter::sa_p_export(sim_anneal* sa_ptr)
+{
+    assert(sa_ptr);
+
+    for (auto *pp : parameters)
+        if (auto *cp_ptr = dynamic_cast<const_parameter *>(pp))
+            if (cp_ptr->tunable == 1)
+                sa_ptr->add_parameter(cp_ptr);
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //  The constant constant parameter class 
@@ -92,6 +105,7 @@ const_parameter::const_parameter(char* nm, double val, double v_min, double v_ma
     assert((l_map == 0) || (v_min > 0));
     
     value = val;
+    loop_complex.register_parameter(this);
 }
 
 double const_parameter::get_mapped_value()
@@ -119,6 +133,20 @@ void const_parameter::set_mapped_value(double m_val)
         value = min_value + m_val * (max_value - min_value);
 }
 
+void const_parameter::print_self(FILE* fp)
+{
+    fprintf(fp, "*pragma parameter %s := %.12lg", name, value);
+    if ((min_value != -__DBL_MAX__) && (max_value != __DBL_MAX__))
+        fprintf(fp, " [%.12lg, %.12lg]", min_value, max_value);
+    if (tunable != 0)
+        fprintf(fp, " tune");
+    if (no_print != 0)
+        fprintf(fp, " no_print");
+    if (log_map != 0)
+        fprintf(fp, " log_map");
+    fprintf(fp, "\n");
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // the assignment parameter class
@@ -128,6 +156,7 @@ expr_parameter::expr_parameter(char* nm, expression* e_ptr, double v_min, double
     parameter(nm, v_min, v_max, npr, 0, 0)
 {
     expr = e_ptr;
+    loop_complex.register_parameter(this);
 }
 
 void expr_parameter::update()
@@ -165,6 +194,8 @@ scan_parameter::scan_parameter(char* nm, double v_min, double v_max, unsigned n_
         d_value = (log(v_max) - log(v_min)) / (double) (n_s - 1);
     } else
         d_value = (v_max - v_min) / (double) (n_s - 1);
+    
+    loop_complex.register_parameter(this, 1);
 }
 
 void scan_parameter::update()

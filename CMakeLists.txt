@@ -26,10 +26,12 @@ add_executable(csv_analyzer
     main.cpp
     lsq_fit.c
     fit_functions.c
+    anneal.cpp
     xrand.cpp
     parameter.cpp
     eval_cache.cpp
-    expression.cpp sum_expression.cpp geomean_expression.cpp min_expression.cpp max_expression.cpp
+    expression.cpp sum_expression.cpp min_expression.cpp max_expression.cpp
+    geomean_expression.cpp avg_expression.cpp
     loop_complex.cpp lsq_fit_function.cpp anneal.cpp
     nodes_of_interest.cpp spice_deck.cpp parser_interface.cpp
     ${BISON_pragma_parser_OUTPUTS}

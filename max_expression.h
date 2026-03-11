@@ -7,7 +7,7 @@
 //
 class max_expression : public expression, public StatefulExpression {
 public:
-    max_expression(expression *arg, LoopComplex &lc);
+    max_expression(expression *arg);
     void initialize() override { value = NAN; }
     void update()     override;
     void finalize()   override { }

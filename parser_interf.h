@@ -52,7 +52,8 @@ void define_param_scan(char *name, void *rng, double n_steps, unsigned flags);
 void define_param_constant(char *name, double value, void *rng, unsigned flags);
 void define_param_expression(char *name, void *expr, void *rng, unsigned flags);
 
-void define_sim_anneal(char *name, double v_min, double v_init, double v_max);
+void define_sim_anneal(char *log_file_nm);
+void define_add2SA_sched(double temp, double n_iter);
 void define_monitor(char *name);
 void define_snapshot(char *name, double start, double frequency);
 void define_lsq_fit(char *name, double order, void *x, void *y);

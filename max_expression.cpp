@@ -1,11 +1,11 @@
 #include "max_expression.h"
 #include "loop_complex.h"
 
-max_expression::max_expression(expression *arg, LoopComplex &lc)
+max_expression::max_expression(expression *arg)
     : expression(stateful_func, arg)
 {
     value = NAN;
-    lc.register_stateful(this);
+    loop_complex.register_stateful(this);
 }
 
 void max_expression::update()
