@@ -78,11 +78,6 @@ unsigned long sim_anneal::n_steps()
     return tot;
 }
 
-void sim_anneal::save_result(FILE* fp)
-{
-    for (auto *pp : sa_p_ptrs ) pp->p_ptr->print_self(fp);
-}
-
 double sim_anneal::comp_eval()
 //
 // The actual simulation happens here
@@ -310,7 +305,7 @@ void sim_anneal::optimize()
         }
     }
 
-    restore_best();                         // Return new configuration
+    restore_best();                         // Return best configuration
 }    
 
 //////////////////////////////////////////////////////////////////////////////////////

@@ -85,6 +85,21 @@ void parameter::sa_p_export(sim_anneal* sa_ptr)
                 sa_ptr->add_parameter(cp_ptr);
 }
 
+void parameter::bo_export(vector<const_parameter *>& tunable_params)
+{
+    for (auto *pp : parameters)
+        if (auto *cp_ptr = dynamic_cast<const_parameter *>(pp))
+            if (cp_ptr->tunable == 1)
+                tunable_params.push_back(cp_ptr);
+}
+
+void parameter::save_result(FILE* fp)
+{
+    for (auto *pp : parameters )
+        if (auto *cp_ptr = dynamic_cast<const_parameter *>(pp))
+            if (cp_ptr->tunable == 1)
+                cp_ptr->print_self(fp);
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //

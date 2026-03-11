@@ -30,14 +30,27 @@ add_executable(csv_analyzer
     xrand.cpp
     parameter.cpp
     eval_cache.cpp
+    bo_optimizer.cpp
     expression.cpp sum_expression.cpp min_expression.cpp max_expression.cpp
     geomean_expression.cpp avg_expression.cpp
-    loop_complex.cpp lsq_fit_function.cpp anneal.cpp
+    loop_complex.cpp lsq_fit_function.cpp
     nodes_of_interest.cpp spice_deck.cpp parser_interface.cpp
     ${BISON_pragma_parser_OUTPUTS}
     ${FLEX_pragma_lexer_OUTPUTS}
 )
 
-target_include_directories(csv_analyzer PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(csv_analyzer PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}
+    /usr/local/include/bayesopt
+)
+
+target_link_directories(csv_analyzer PRIVATE
+    /usr/local/lib
+)
+
+target_link_libraries(csv_analyzer
+    bayesopt
+    nlopt
+)
 
 install(TARGETS csv_analyzer RUNTIME DESTINATION bin)

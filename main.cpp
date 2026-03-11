@@ -273,7 +273,7 @@ int main(int argc, char *argv[])
         sim_anneal_ptr->optimize();
         sprintf(josim_output_buf, "%s_opt_params.txt", argv[1]);
         FILE *ofp = fopen(josim_output_buf, "w");
-        sim_anneal_ptr->save_result(ofp);
+        parameter::save_result(ofp);
         fclose(ofp);
     } else
         loop_complex.run_once(sum_fp);

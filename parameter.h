@@ -6,9 +6,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <vector>
+using namespace std;
 
 class expression;                           // Forward declaration (instead of pulling in the expression.h file)
 class sim_anneal;                           // dito
+class const_parameter;                      //  ..
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -63,6 +65,10 @@ public:
     
     static void sa_p_export(sim_anneal *sa_ptr); // Export all tunable paramters to the
                                             // simulated annealing subsystem
+    static void bo_export(vector<const_parameter *> &tunable_params); // same for the BO subsystem
+    
+    static void save_result(FILE *of);      // For optimizer runs, save the results
+
     char *get_name() {return name;};
 };
 
