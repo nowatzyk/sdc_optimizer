@@ -56,18 +56,16 @@ enum exp_type {
 //
 
 class StatefulExpression {
-public:
-    unsigned    level;              // nesting level at registration time
-                                    // 0 = innermost loop
 
-    virtual void initialize() = 0; // called before first iteration of level
-    virtual void update()     = 0; // called after every JoSIM run
-    virtual void finalize()   = 0; // called when level is exhausted
+public:
+    virtual void initialize() = 0;  // called before first iteration of level
+    virtual void update()     = 0;  // called after every JoSIM run
+    virtual void finalize()   = 0;  // called when level is exhausted
 
     virtual ~StatefulExpression() = default;
 
 protected:
-    StatefulExpression() : level(0) {}
+    StatefulExpression() {}
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

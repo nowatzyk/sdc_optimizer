@@ -120,7 +120,7 @@ void run_josim()
     char *buf_p;
     {
         //
-        // Discard white space and doublle quotes
+        // Discard white space and double quotes
         //
         char *tmp = josim_output_buf;
         for (buf_p = josim_output_buf; *buf_p; buf_p++)
@@ -133,7 +133,7 @@ void run_josim()
     for (unsigned ic = 0; 1; ic++) {
         char *tmp = buf_p;
         while (*tmp && (*tmp != ',')) tmp++;    // Find end of string
-        int last = !*tmp;       // Set if this is the last colun
+        int last = !*tmp;       // Set if this is the last column
         *tmp = 0;               // Replance comma with 0
         //
         // buf_p is now pointing to the name string for this column

@@ -23,7 +23,7 @@ class LoopComplex;          //Forward declaration
 // find() is retained for the parser's define_function2() lookup.
 //
 
-class lsq_fit_function {
+class lsq_fit_function : public StatefulExpression {
 public:
     unsigned            level;          // nesting level, set by LoopComplex::register_lsq_fit()
 
@@ -32,9 +32,9 @@ public:
                      LoopComplex &lc);
 
     // Lifecycle interface (called by LoopComplex):
-    void    initialize();               // reset + init_lsq_fit
-    void    add_datum();                // add one data point (if both vars are finite)
-    void    finalize();                 // solve fit; populate coefficients / residual
+    void    initialize() override;      // reset + init_lsq_fit
+    void    update()     override;      // add one data point (if both vars are finite)
+    void    finalize()   override;      // solve fit; populate coefficients / residual
 
     // Result accessors (used by expression evaluator via function2 callbacks):
     double  fit_ok()     const { return isfinite(residual) ? 1.0 : 0.0; }

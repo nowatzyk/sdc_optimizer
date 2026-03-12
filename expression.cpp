@@ -126,19 +126,23 @@ double expression::get_value()
             break;
 
         case addition:
-            rtn = l_arg->get_value() + r_arg->get_value();
+            l = l_arg->get_value();
+            if (isfinite(l)) rtn = l + r_arg->get_value();
             break;
 
         case subtraction:
-            rtn = l_arg->get_value() - r_arg->get_value();
+            l = l_arg->get_value();
+            if (isfinite(l)) rtn = l - r_arg->get_value();
             break;
 
         case multiplication:
-            rtn = l_arg->get_value() * r_arg->get_value();
+            l = l_arg->get_value();
+            if (isfinite(l)) rtn = l * r_arg->get_value();
             break;
 
         case division:
-            rtn = l_arg->get_value() / r_arg->get_value();
+            l = l_arg->get_value();
+            if (isfinite(l)) rtn = l / r_arg->get_value();
             break;
 
         case test_select:

@@ -33,7 +33,7 @@ lsq_fit_function::lsq_fit_function(const char *nm, int o,
     init_lsq_fit(lsq_fit_ptr);
 
     // Self-register with LoopComplex -- level assigned here
-    lc.register_lsq_fit(this);
+    lc.register_stateful(this);
 
     // Add to find() registry
     registry.push_back(this);
@@ -50,7 +50,7 @@ void lsq_fit_function::initialize()
     init_lsq_fit(lsq_fit_ptr);
 }
 
-void lsq_fit_function::add_datum()
+void lsq_fit_function::update()
 {
     double x = free_var->get_value();
     if (!isfinite(x))

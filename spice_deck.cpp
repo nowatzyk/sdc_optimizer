@@ -12,6 +12,7 @@ extern "C" {
 }
 
 extern unsigned yy_n_parse_err;
+extern unsigned n_josim_runs;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -47,16 +48,27 @@ spice_elements::spice_elements()
 
 void spice_elements::print(FILE *of)
 {
+    double v;
+    
     switch (se_type) {
         case text:
             fputs(txt.text, of);
             break;
+
         case parameter:
-            fprintf(of, "%.12lg", par.param->get_cur_value());
+            v = par.param->get_cur_value();
+            if (!isfinite(v)) {
+                fprintf(stderr, "Reference to '%s' parameter yieded NAN in run %u\n",
+                        par.param->get_name(), n_josim_runs);
+                exit(1);
+            }
+            fprintf(of, "%.12lg", v);
             break;
+
         case new_line:
             fputc('\n', of);
             break;
+
         default:
             assert(0);
     }

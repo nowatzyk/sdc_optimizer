@@ -150,7 +150,7 @@ void add_new_line_to_spice_deck()
 
 void * define_range(double f, double t)
 {
-    if (f <= t) {
+    if (f >= t) {
         fprintf(stderr, "Line %d: [from < to] required\n", yylineno);
         yy_n_parse_err += 1;
         return nullptr;

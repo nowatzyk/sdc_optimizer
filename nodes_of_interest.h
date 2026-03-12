@@ -54,14 +54,18 @@ public:
 class nodes_of_interest {
     static vector<nodes_of_interest *> all_noi_s;
 
-    const char  *name;
-    int          col_index;     // column index in JoSIM output, or -1 if not yet matched
+    const char *name;
+    int         col_index;                  // column index in JoSIM output, or -1 if not yet matched
+    
+    static unsigned is_valid_flag;          // A flag that indicates if a result is available:
+                                            // It is cleared prior to a simulation run and set 
+                                            // once the JoSIM completed successfully
 
 public:
     nodes_of_interest(const char *name);
 
     static nodes_of_interest *find(const char *name);
-    static nodes_of_interest *find_undef();     // first NOI with col_index < 0
+    static nodes_of_interest *find_undef(); // first NOI with col_index < 0
     static unsigned           get_n_noi()       { return all_noi_s.size(); }
 
     int         get_col_index()                 { return col_index; }
@@ -70,6 +74,9 @@ public:
 
     int         print(char *f_name);
     static void print_all();
+    
+    static unsigned is_valid() {return is_valid_flag; };
+    static void set_validity(unsigned isv) {is_valid_flag = (isv != 0); };
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

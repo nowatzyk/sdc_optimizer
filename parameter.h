@@ -48,14 +48,21 @@ public:
     double get_cur_value() {return value;}; // returns the current value of the parameter
     
     virtual void    update() {};            // This must be called *before* the simulation step
-                                            // By default do nothing
+                                            // so that parameters that are referenced in the spice deck
+                                            // reflect current values. It also ensures that expressions
+                                            // referring to simulation outputs are set to NAN, so that
+                                            // circular dependencies cause errors and do not go by unnoticed.
+                                            // By default do nothing. It is important that update() does not 
+                                            // cause any state changes. extra calls to update() ought to be
+                                            // inconsequential.
                                             
     virtual void    initialize() {};        // Initializer: for looping parameters, like scan, etc.
                                             // This will be called before the loop is executed for 
-                                            // the firest time
+                                            // the firest time. Non-looping parameters simply do nothing here.
                                             
     virtual unsigned next() {return 1; };   // iterator: must be called after each loop iteration
                                             // Returns 0 when the loop is not complete and 1 otherwise
+                                            // For a non-looping parameter, this is a No-op.
                                             
     static parameter *find_parameter(const char *nm);   // find parameter by its name (symbol)
     
@@ -98,7 +105,7 @@ public:
                     double v_min = __DBL_MAX__, double v_max = -__DBL_MAX__,
                     unsigned npr = 0);
     
-    void            update() override;
+    void            update() override;      // Update the value from the current expression.
 };
     
 class scan_parameter : public parameter {
@@ -113,6 +120,6 @@ public:
                     unsigned npr = 0, unsigned l_map = 0);   // Creates a scan-type parameter
 
     void initialize() override {step_cntr = 0;};
-    void update() override;
-    unsigned next() override {return ++step_cntr >= n_steps; };
+    void update()     override;
+    unsigned next()   override {return ++step_cntr >= n_steps; };
 };

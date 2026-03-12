@@ -18,8 +18,7 @@ class lsq_fit_function;                     // forward declaration
 class run_level {
     unsigned        level;                  // advisory / debugging
     parameter       *looping_p_ptr;         // Optional looping parameter
-    
-    vector <lsq_fit_function *> lsq_f_ptrs; // LSQ fits that belong to this level
+
     vector <StatefulExpression *> s_expr_ptrs; // Stateful expressions that belong to this level
     vector <parameter *> p_updt_ptrs;       // Parameter update pointers
     
@@ -34,7 +33,6 @@ public:
     
     void            add_looping_param(parameter *p_ptr);
     void            add_s_expr(StatefulExpression *se_ptr);
-    void            add_lsq_fit(lsq_fit_function *lf_ptr);
     void            add_param(parameter *p_ptr);
     
     void            run_this_level(FILE *sum_fp);  // Execute this level
@@ -67,7 +65,6 @@ public:
 
     void register_stateful  (StatefulExpression  *se);   // captures current_level
     void register_parameter (parameter *pp, unsigned is_looping = 0);   // Registers a parameter
-    void register_lsq_fit   (lsq_fit_function    *lf);   // captures current_level; finalized after stateful
 
     void run_once(FILE *sum_fp);            // Perform a simulation run (incl. all looping and the kitchen sink
 };

@@ -42,6 +42,7 @@ const double threshold_frac = 0.6;          // Peak search threshold, 75% of max
 const double threshold_hyst = 0.01;         // Hysteresis to avoid noise induced false peak locations
 
 std::vector<nodes_of_interest *> nodes_of_interest::all_noi_s;  //The collection of NOI's 
+unsigned nodes_of_interest::is_valid_flag = 0; // NOI's are not valid prior to simulation
 
 double sim_time(double n)
 // Returns the simulation time for the n-th row
@@ -421,7 +422,7 @@ double locate_peak(void *obj_ptr, double x)
     nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
 
     int n_peak = (int) nearbyint(x);
-    if (n_peak < 0)
+    if (!nodes_of_interest::is_valid() || (n_peak < 0))
         return NAN;
     
     int ind = noi_ptr->get_col_index();
@@ -456,7 +457,10 @@ double count_peaks(void *obj_ptr, double x)
 //
 {
     nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
-
+    
+    if (!nodes_of_interest::is_valid())
+        return NAN;
+    
     unsigned n_peaks = 0;
     
     int ind = noi_ptr->get_col_index();
@@ -494,7 +498,7 @@ double locate_rise(void *obj_ptr, double x)
     nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
 
     int n_peak = (int) nearbyint(x);
-    if (n_peak < 0)
+    if (!nodes_of_interest::is_valid() || (n_peak < 0))
         return NAN;
     
     int ind = noi_ptr->get_col_index();
@@ -531,7 +535,7 @@ double locate_fall(void *obj_ptr, double x)
     nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
     
     int n_peak = (int) nearbyint(x);
-    if (n_peak < 0)
+    if (!nodes_of_interest::is_valid() || (n_peak < 0))
         return NAN;
     
     int ind = noi_ptr->get_col_index();
@@ -569,7 +573,7 @@ double locate_edge(void *obj_ptr, double x)
     nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
     
     int n_peak = (int) nearbyint(x);
-    if (n_peak < 0)
+    if (!nodes_of_interest::is_valid() || (n_peak < 0))
         return NAN;
     
     int ind = noi_ptr->get_col_index();
@@ -604,6 +608,9 @@ double count_edges(void *obj_ptr, double x)
 // <x> isn't used now, but may be used later to supply edge search parameters
 {
     nodes_of_interest *noi_ptr = (nodes_of_interest *) obj_ptr;
+    
+    if (!nodes_of_interest::is_valid())
+        return NAN;
     
     unsigned n_edges = 0;
     
