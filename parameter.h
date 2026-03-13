@@ -115,5 +115,8 @@ public:
 
     void            initialize()    override {step_cntr = 0;};
     double          get_cur_value() override;
-    unsigned        next()          override {return ++step_cntr >= n_steps; };
+    unsigned        next()          override // Keep the state of the final iteration
+                    {   if ((step_cntr+1) >= n_steps) return 1;
+                        else {step_cntr++;            return 0; };
+                    };
 };

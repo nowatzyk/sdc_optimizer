@@ -112,8 +112,8 @@ double expression::get_value()
             break;
 
         case function1:
-            l = l_arg->get_value();
-            if (isfinite(l)) rtn = func1_ptr(l);
+            l = l_arg->get_value(); // Note: don't filter out NAN : the isfinite() funtion will break
+            rtn = func1_ptr(l);
             break;
 
         case function2:

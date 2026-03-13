@@ -44,7 +44,7 @@ void parameter::print_name(FILE* fp)
 
 void parameter::print_value(FILE* fp)
 {
-    fprintf(fp, " %.15lg", value);
+    fprintf(fp, " %.15lg", get_cur_value());
 }
 
 parameter *parameter::find_parameter(const char* nm)

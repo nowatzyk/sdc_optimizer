@@ -373,10 +373,6 @@ void define_snapshot(char *name, double start, double freq)
     snapshot_frequency  = (unsigned) f;
 }
 
-void define_bo()
-{
-}
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Expression construction callbacks
