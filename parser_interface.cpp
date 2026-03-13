@@ -61,15 +61,19 @@ f1_table func1_tab[] = {
 };
 
 f2_table func2_tab[] = {
-    {"peak",     locate_peak,  noi_type},
-    {"n_peaks",  count_peaks,  noi_type},
-    {"t_rise",   locate_rise,  noi_type},
-    {"t_fall",   locate_fall,  noi_type},
-    {"t_edge",   locate_edge,  noi_type},
-    {"n_edges",  count_edges,  noi_type},
+    {"peak",     locate_peak,       noi_type},
+    {"n_peaks",  count_peaks,       noi_type},
+    {"t_rise",   locate_rise,       noi_type},
+    {"t_fall",   locate_fall,       noi_type},
+    {"t_edge",   locate_edge,       noi_type},
+    {"n_edges",  count_edges,       noi_type},
     {"fit_ok",   test_lsq_fit,      lsq_fit_type},
     {"fit_coef", lsq_fit_get_cx,    lsq_fit_type},
     {"fit_resi", lsq_fit_residual,  lsq_fit_type},
+    {"match_peaks",    match_peaks, tm_pattern},
+    {"match_rise_edge",match_r_edg, tm_pattern},
+    {"match_fall_edge",match_f_edg, tm_pattern},
+    {"match_any_edge", match_a_edg, tm_pattern},
     {nullptr,    nullptr,      none_of_the_above}
 };
 
@@ -466,6 +470,7 @@ void *define_function2(char *name, char *obj_name, void *y)
     switch (f_type) {
         case noi_type:      obj_ptr = nodes_of_interest::find(obj_name);  break;
         case lsq_fit_type:  obj_ptr = lsq_fit_function::find(obj_name);   break;
+        case tm_pattern:    obj_ptr = time_pattern::find(obj_name);       break;
         default: assert(0);
     }
     if (!obj_ptr) {
@@ -501,4 +506,101 @@ void define_lsq_fit(char *name, double order, void *x, void *y)
     new lsq_fit_function(name, i_order,
                          (expression *) x, (expression *) y,
                          loop_complex);
+}
+
+void *define_p_cat(void *p1, void *p2)
+// concatenate two pattern time elelemts
+{
+    struct p_time_element *t_ptr = (struct p_time_element *) p1;
+    while (t_ptr->next != nullptr)          // finds the end of the list
+        t_ptr->next = t_ptr;
+    t_ptr = (struct p_time_element *) p2;
+    return p1;
+}
+
+void *define_p_term(unsigned rel, double t)
+{
+    struct p_time_element *t_ptr = (struct p_time_element *) malloc(sizeof(struct p_time_element));
+    t_ptr->next = nullptr;
+    t_ptr->time = NAN;
+    
+    if (t < 0.0) {
+        fprintf(stderr, "Line %d: time step must be >= 0\n", yylineno);
+        yy_n_parse_err++;
+        return t_ptr;
+    }
+    
+    if (rel) t_ptr->time = -t;
+    else     t_ptr->time = -t;
+    
+    return t_ptr;
+}
+
+void *define_p_rep(void *t, double n)
+{
+    struct p_time_element *t_ptr = (struct p_time_element *) t;
+    if (n < 1.0) {
+        fprintf(stderr, "Line %d: repetition count must >= 1\n", yylineno);
+        yy_n_parse_err++;
+        return t_ptr;
+    }
+    unsigned i = (unsigned) nearbyint(n);
+    
+    struct p_time_element *l_ptr = t_ptr;  // Pointer to the last element
+    while (l_ptr->next != nullptr)         // finds the end of the list
+        l_ptr->next = l_ptr;
+    
+    for (struct p_time_element *m_ptr = l_ptr; i > 0; i--) { // replicate n times 
+        struct p_time_element *r_ptr = t_ptr;
+        do {
+            struct p_time_element *n_ptr = (struct p_time_element *) malloc(sizeof(struct p_time_element));
+            n_ptr->time = r_ptr->time;
+            n_ptr->next = nullptr;
+            m_ptr->next = n_ptr;
+            m_ptr = n_ptr;
+            
+            if (r_ptr == l_ptr)
+                break;
+            r_ptr = r_ptr->next;
+        } while (1);
+    }
+    
+    return t_ptr;
+}
+
+void define_pattern(char *name, char *noi, void *p)
+{
+    nodes_of_interest *noi_ptr = nodes_of_interest::find(noi);
+    if (noi_ptr == nullptr) {
+        fprintf(stderr, "Line %d: '%s' is not defined\n", yylineno, noi);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    time_pattern *t_ptr = time_pattern::find(name);
+    if (t_ptr != nullptr) {
+        fprintf(stderr, "Line %d: '%s' already in use\n", yylineno, name);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    t_ptr = new time_pattern(name, noi_ptr);
+    
+    double t = -__DBL_MAX__;
+    struct p_time_element *te_ptr = (struct p_time_element *) p;
+    while (te_ptr != nullptr) {
+        if (te_ptr->time < 0.0) t -= te_ptr->time;
+        else if (te_ptr->time <= t) {
+            fprintf(stderr, "Line %d: time must be monotonically increasing (use +dt for relative time)\n",
+                    yylineno);
+            yy_n_parse_err++;
+            return;             // Yeah, leaks memory, but will be aborting, so who cares.
+        } else
+            t = te_ptr->time;
+        t_ptr->add_time(t);
+        
+        struct p_time_element *n_ptr = te_ptr->next;
+        free(te_ptr);
+        te_ptr = n_ptr;
+    }
 }

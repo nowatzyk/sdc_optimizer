@@ -174,9 +174,15 @@ expr_parameter::expr_parameter(char* nm, expression* e_ptr, double v_min, double
     loop_complex.register_parameter(this);
 }
 
-void expr_parameter::update()
+double expr_parameter::get_cur_value()
 {
+    if (locked == 1) {
+        fprintf(stderr, "Cyclic parameter dependence detected via '%s' bye", name);
+        exit(1);
+    }
+    locked = 1;                             // Prevent this function call from the expression evaluation
     double new_value = expr->get_value();
+    locked = 0;                             // release the lock.
     
     if (isfinite(new_value)) {
         //
@@ -189,7 +195,7 @@ void expr_parameter::update()
         if (new_value > max_value) new_value = max_value;
     }
     
-    value = new_value;
+    return new_value;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -213,10 +219,10 @@ scan_parameter::scan_parameter(char* nm, double v_min, double v_max, unsigned n_
     loop_complex.register_parameter(this, 1);
 }
 
-void scan_parameter::update()
+double scan_parameter::get_cur_value()
 {
     if (log_map)
-        value = min_value * exp(d_value * (double) step_cntr);
+        return min_value * exp(d_value * (double) step_cntr);
     else
-        value = min_value + d_value * (double) step_cntr;
+        return min_value + d_value * (double) step_cntr;
 }

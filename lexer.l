@@ -34,28 +34,31 @@
                         return NUMBER;
                      }
                     
-<IN_PRAGMA>"NAN"     { yylval.val = NAN; return NUMBER; }
+<IN_PRAGMA>"NAN"            { yylval.val = NAN; return NUMBER; }
                     
-<IN_PRAGMA>"scan"    { return SCAN; }
+<IN_PRAGMA>"scan"           { return SCAN; }
 
-<IN_PRAGMA>"sim_anneal" { return SIM_ANNEAL; }
-<IN_PRAGMA>"sa_schedule" { return SA_SCHEDULE; }
+<IN_PRAGMA>"sim_anneal"     { return SIM_ANNEAL; }
+<IN_PRAGMA>"sa_schedule"    { return SA_SCHEDULE; }
 
-<IN_PRAGMA>"baysian_opt" { return BAYSIAN_OPT; }
+<IN_PRAGMA>"pattern"        { return PATTERN; }
+<IN_PRAGMA>"for"            { return FOR; }
 
-<IN_PRAGMA>"parameter" { return PARAMETER; }
+<IN_PRAGMA>"baysian_opt"    { return BAYSIAN_OPT; }
 
-<IN_PRAGMA>"monitor" { return MONITOR; }
+<IN_PRAGMA>"parameter"      { return PARAMETER; }
 
-<IN_PRAGMA>"snapshot" { return SNAPSHOT; }
+<IN_PRAGMA>"monitor"        { return MONITOR; }
 
-<IN_PRAGMA>"lsq_fit" { return LSQ_FIT; }
+<IN_PRAGMA>"snapshot"       { return SNAPSHOT; }
 
-<IN_PRAGMA>"no_print" { return NO_PRINT; }
+<IN_PRAGMA>"lsq_fit"        { return LSQ_FIT; }
 
-<IN_PRAGMA>"log_map" { return LOG_MAP; }
+<IN_PRAGMA>"no_print"       { return NO_PRINT; }
 
-<IN_PRAGMA>"tune"    { return TUNEABLE; }
+<IN_PRAGMA>"log_map"        { return LOG_MAP; }
+
+<IN_PRAGMA>"tune"           { return TUNEABLE; }
 
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     

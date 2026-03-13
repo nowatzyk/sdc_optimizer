@@ -6,12 +6,12 @@
 
 #include <stdio.h>
 
-extern FILE *yyin;                      // fd for spice source file
-int yyparse();                          // The Bison parser (in plain C)
+extern FILE *yyin;                          // fd for spice source file
+int yyparse();                              // The Bison parser (in plain C)
 
 struct units {
-    char        c;                      // character representation
-    double      val;                    // Value
+    char        c;                          // character representation
+    double      val;                        // Value
 };
 
 struct range_pair {
@@ -24,7 +24,7 @@ struct f1_table {                           // Function pointer f1_table
     double              (*func1_ptr) (double x); // Pointer to the funcion
 };
 
-enum function_type {noi_type, lsq_fit_type, none_of_the_above};
+enum function_type {noi_type, lsq_fit_type, tm_pattern, none_of_the_above};
 
 struct f2_table {                           // Function pointer f2_table
     const char          *name;              // Name of this function (or nullptr)
@@ -33,9 +33,14 @@ struct f2_table {                           // Function pointer f2_table
     enum function_type  f_type;             // used to find the correct object pointer
 };
 
-extern struct units unit_table[];       // Common SI scale identifiers
+struct p_time_element {
+    double              time;               // Boundary time (if negative: a relative time)
+    struct p_time_element *next;            // Pointer to the next
+};
 
-extern unsigned  yy_n_parse_err;        // #of errors during parsing the circuit file
+extern struct units unit_table[];           // Common SI scale identifiers
+
+extern unsigned  yy_n_parse_err;            // #of errors during parsing the circuit file
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // 
@@ -60,6 +65,11 @@ void define_lsq_fit(char *name, double order, void *x, void *y);
 void define_bo(double n_itr);
 
 void *define_range(double from, double to);
+
+void define_pattern(char *name, char *noi, void *p);
+void *define_p_cat(void *p1, void *p2);
+void *define_p_term(unsigned rel, double t);
+void *define_p_rep(void *t, double n);
 
 void *define_add(void *x, void *y);
 void *define_sub(void *x, void *y);

@@ -81,6 +81,39 @@ public:
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
+//  Time Pattern object
+//
+//  This is used to define time intervals for matching the output of a circuit against an expected
+//  behavior:
+//
+//  ---t0----t1-------t2------t3------...-->  time-line
+//
+//  The Pattern object is a vector of times [t0, t1,... tn]. A good match consists of no event
+//  in [0,t0), followed by one event in [t0,t1), no event in [t1,t2), ....
+//  Events can be a peak, a {rising,falling,aby}edge. Peaks are usually used on voltage nodes,
+//  while edges make more sense on phase.
+//  t0 can be 0.0, so that the first interval is empty, which essentially inverts the sense.
+//
+class time_pattern {
+    const char          *name;              // Name of this pattern
+    nodes_of_interest   *noi_ptr;           // NOI to which this pattern applies
+    static vector<time_pattern *> all_tps;  // The collection of time patterns
+    
+    vector<double>      pattern;            // The actual pattern
+    double              t_last;             // time of the end of the last interval
+    
+public:
+    time_pattern(char *nm, nodes_of_interest *np);
+    void add_time(double tt);               // Adds a transition time
+    static time_pattern *find(const char *name); // Finds a pattern via name loop-up (linear search)
+    nodes_of_interest   *get_noi_ptr() {return noi_ptr;};
+    
+    unsigned cnt_missmatches(vector<double> &t_peaks);
+};
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
 // Analysis functions -- callable as function2 expression callbacks.
 // obj_ptr is a nodes_of_interest*.
 //
@@ -91,6 +124,11 @@ double locate_rise  (void *obj_ptr, double x);
 double locate_fall  (void *obj_ptr, double x);
 double locate_edge  (void *obj_ptr, double x);
 double count_edges  (void *obj_ptr, double x);
+
+double match_peaks  (void *obj_ptr, double x);
+double match_r_edg  (void *obj_ptr, double x);
+double match_f_edg  (void *obj_ptr, double x);
+double match_a_edg  (void *obj_ptr, double x);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //

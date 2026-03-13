@@ -29,6 +29,7 @@ protected:
     unsigned        no_print:1;             // If set, do not include in summary
     unsigned        tunable:1;              // If set, will be subject to simulated annealing, BO, etc.
     unsigned        log_map:1;              // Uses logarithmic mapping of tuning range
+    unsigned        locked:1;               // Used to detect dependency cycles
 
     // Common:
     double          min_value, max_value;   // Value range
@@ -45,16 +46,7 @@ protected:
 public:
     virtual ~parameter() = default;         // Recommended C++ practice, alas not needed here
     
-    double get_cur_value() {return value;}; // returns the current value of the parameter
-    
-    virtual void    update() {};            // This must be called *before* the simulation step
-                                            // so that parameters that are referenced in the spice deck
-                                            // reflect current values. It also ensures that expressions
-                                            // referring to simulation outputs are set to NAN, so that
-                                            // circular dependencies cause errors and do not go by unnoticed.
-                                            // By default do nothing. It is important that update() does not 
-                                            // cause any state changes. extra calls to update() ought to be
-                                            // inconsequential.
+    virtual double get_cur_value() {return NAN;}; // value depends on parameter type
                                             
     virtual void    initialize() {};        // Initializer: for looping parameters, like scan, etc.
                                             // This will be called before the loop is executed for 
@@ -95,6 +87,8 @@ public:
     void   set_mapped_value(double m_val);  // Does the reverse
     
     void   print_self(FILE *fp);            // Prints a version of itself
+
+    double get_cur_value() override {return value;}; // just returns the value
 };
 
 class expr_parameter : public parameter {
@@ -105,7 +99,7 @@ public:
                     double v_min = __DBL_MAX__, double v_max = -__DBL_MAX__,
                     unsigned npr = 0);
     
-    void            update() override;      // Update the value from the current expression.
+    double get_cur_value() override;        // Returns the current value
 };
     
 class scan_parameter : public parameter {
@@ -119,7 +113,7 @@ public:
                     double v_min, double v_max, unsigned n_steps,
                     unsigned npr = 0, unsigned l_map = 0);   // Creates a scan-type parameter
 
-    void initialize() override {step_cntr = 0;};
-    void update()     override;
-    unsigned next()   override {return ++step_cntr >= n_steps; };
+    void            initialize()    override {step_cntr = 0;};
+    double          get_cur_value() override;
+    unsigned        next()          override {return ++step_cntr >= n_steps; };
 };

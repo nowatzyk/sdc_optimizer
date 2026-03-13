@@ -21,10 +21,10 @@ int yylex(void);
     
 %token <text> END LINE SYMBOL PSUBSTITUTION
 %token <val> NUMBER
-%type <pointer> expr terminal range opt_range
+%type <pointer> expr terminal range opt_range pattern p_time
 %type <flags> attribute attributes
 %token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB
-%token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT
+%token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT PATTERN FOR
 
 %left TEST_OP OTHERWISE
 %left COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
@@ -65,10 +65,26 @@ pragma_body:
     |   SA_SCHEDULE NUMBER COMMA NUMBER     { define_add2SA_sched($2, $4); }
     |   BAYSIAN_OPT                         { define_bo(190.0); }
     |   BAYSIAN_OPT NUMBER                  { define_bo($2); }
+    |   PATTERN SYMBOL FOR SYMBOL EQUAL pattern { define_pattern($2, $4, $6); }
     ;
-    
+
+pattern:
+        p_time                              { $$ = $1; }
+    |   pattern COMMA p_time                { $$ = define_p_cat($1, $3); }
+    ;
+
+p_time:
+        NUMBER                              { $$ = define_p_term(0, $1); }           
+    |   PLUS NUMBER                         { $$ = define_p_term(1, $2); }
+    |   OSQB pattern CSQB NUMBER            { $$ = define_p_rep($2, $4); }
+    ;
+
 opt_range:                                  { $$ = NULL; }
     |   range                               { $$ = $1; }
+    ;
+    
+range:
+        OSQB NUMBER COMMA NUMBER CSQB       { $$ = define_range($2, $4); }
     ;
     
 attributes:                                 { $$ = 0; }
@@ -79,10 +95,6 @@ attribute :
         NO_PRINT                            { $$ = 1; }
     |   LOG_MAP                             { $$ = 2; }
     |   TUNEABLE                            { $$ = 4; }
-    ;
-    
-range:
-        OSQB NUMBER COMMA NUMBER CSQB       { $$ = define_range($2, $4); }
     ;
     
 expr:

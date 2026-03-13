@@ -51,6 +51,8 @@ double sim_time(double n)
     return sim_time_start + sim_time_incr * n;
 }
 
+std::vector<time_pattern *> time_pattern::all_tps;
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // time_series -- statics
@@ -639,3 +641,210 @@ double count_edges(void *obj_ptr, double x)
     
     return NAN;                         // unreachable
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Time pattern stuff
+//
+
+time_pattern::time_pattern(char* nm, nodes_of_interest* np) : name(nm), noi_ptr(np), t_last(-1.0)
+{
+    all_tps.push_back(this);
+}
+
+void time_pattern::add_time(double tt)
+{
+    assert((tt >= 0.0) && (tt > t_last));
+    t_last = tt;
+    pattern.push_back(tt);
+}
+
+time_pattern * time_pattern::find(const char* name)
+{
+    for (unsigned i = 0; i < all_tps.size(); i++)
+        if (!strcmp(name, all_tps[i]->name))
+            return all_tps[i];
+    return nullptr;
+}
+
+unsigned time_pattern::cnt_missmatches(vector<double>& t_ev)
+// given a vector of event times <t_peaks> and the given pattern, count 
+// the number of times an event was/was-not in its expected interval
+{
+    unsigned n_mismatches = 0;
+    
+    double tn = 0.0;                    // Start time of the n-th interval
+    double tnp1;                        // Start time of the (n+1)-th interval
+    
+    double t_event = -__DBL_MAX__;      // Time of event
+    
+    unsigned events_expected = 1;       // The first interval shall have no event
+    
+    unsigned ic = 0;                    // Interval counter
+    unsigned ec = 0;                    // event counter
+    
+    do {                                // loop over intervals
+        tnp1 = (ic < pattern.size()) ? pattern[ic++] : __DBL_MAX__;
+        events_expected ^= 1;
+        //
+        // In the interval [tn, tnp1) should be <events_expected> events
+        //
+        unsigned event_count = 0;
+        
+        while ((t_event < tn) && (ec < t_ev.size())) {
+            t_event = t_ev[ec++];
+            if ((t_event >= tn) && (t_event < tnp1)) event_count++;
+            if (t_event >= tnp1) break;
+        }
+        
+        if (events_expected != event_count) n_mismatches++;
+        
+        tn = tnp1;                      // Move to the next interval
+    } while (ic < pattern.size());
+        
+    return n_mismatches;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+double match_peaks  (void *obj_ptr, double x)
+//
+// Locates all peaks for a given NOI and checks them against a time pattern
+//
+{
+    if (!nodes_of_interest::is_valid())
+        return NAN;
+    
+    nodes_of_interest *noi_ptr = ((time_pattern *) obj_ptr)->get_noi_ptr();
+    vector<double> t_peaks;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < josim_out_columns.size()));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+    
+    unsigned i = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        double tp = ts_ptr->peak_search(i, imax, threshold_frac * ts_ptr->get_max(),
+                                        threshold_hyst * ts_ptr->get_max(), next);
+        if (tp < 0)
+            break;                      // No more peaks
+            
+        t_peaks.push_back(tp);          // Got one
+        i = next;
+    } while (1);
+
+    return (double) ((time_pattern *) obj_ptr)->cnt_missmatches(t_peaks);
+}
+
+double match_r_edg  (void *obj_ptr, double x)
+//
+// Same as above, but locates rising edges instead of peaks
+//
+{
+    if (!nodes_of_interest::is_valid())
+        return NAN;
+    
+    nodes_of_interest *noi_ptr = ((time_pattern *) obj_ptr)->get_noi_ptr();
+    vector<double>t_r_edge;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < josim_out_columns.size()));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+    
+    unsigned imin = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        unsigned edge_type;
+        double tx = ts_ptr->edge_search(imin, imax, edge_search_min_chg * 2.0 * M_PI, edge_search_t_win,
+                                        edge_type, next);
+        
+        if (tx < 0.0)
+            break;
+        
+        if (edge_type == 1)             // Got a rising edge
+            t_r_edge.push_back(tx);
+
+        imin = next;                    // Prepare next sarch
+    } while (1);   
+    
+    return (double) ((time_pattern *) obj_ptr)->cnt_missmatches(t_r_edge);
+}
+
+
+double match_f_edg  (void *obj_ptr, double x)
+//
+// Same as above, but locates falling edges
+//
+{
+    if (!nodes_of_interest::is_valid())
+        return NAN;
+    
+    nodes_of_interest *noi_ptr = ((time_pattern *) obj_ptr)->get_noi_ptr();
+    vector<double>t_f_edge;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < josim_out_columns.size()));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+    
+    unsigned imin = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        unsigned edge_type;
+        double tx = ts_ptr->edge_search(imin, imax, edge_search_min_chg * 2.0 * M_PI, edge_search_t_win,
+                                        edge_type, next);
+        
+        if (tx < 0.0)
+            break;
+        
+        if (edge_type == 0)             // Got a rising edge
+            t_f_edge.push_back(tx);
+        
+        imin = next;                    // Prepare next sarch
+    } while (1);   
+    
+    return (double) ((time_pattern *) obj_ptr)->cnt_missmatches(t_f_edge);
+}
+
+double match_a_edg  (void *obj_ptr, double x)
+//
+// Same as above, but locates any edges
+//
+{
+    if (!nodes_of_interest::is_valid())
+        return NAN;
+    
+    nodes_of_interest *noi_ptr = ((time_pattern *) obj_ptr)->get_noi_ptr();
+    vector<double>t_a_edge;
+    
+    int ind = noi_ptr->get_col_index();
+    assert((ind >= 0) && (ind < josim_out_columns.size()));
+    time_series *ts_ptr = josim_out_columns[ind];
+    assert(ts_ptr != nullptr);
+    
+    unsigned imin = 0;
+    unsigned imax = ts_ptr->get_n() - 1;
+    do {
+        unsigned next;
+        unsigned edge_type;
+        double tx = ts_ptr->edge_search(imin, imax, edge_search_min_chg * 2.0 * M_PI, edge_search_t_win,
+                                        edge_type, next);
+        
+        if (tx < 0.0)
+            break;
+
+        t_a_edge.push_back(tx);
+        
+        imin = next;                    // Prepare next sarch
+    } while (1);   
+    
+    return (double) ((time_pattern *) obj_ptr)->cnt_missmatches(t_a_edge);
+}
+

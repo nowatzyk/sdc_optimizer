@@ -52,7 +52,6 @@ void run_level::run_this_level(FILE *sum_fp)
             
         do {
             nodes_of_interest::set_validity(0);         // Not valid prior to JoSIM run
-            for (auto *pp : p_updt_ptrs)  pp->update();
             
             if (below != nullptr)
                 below->run_this_level(sum_fp);          // recursively execute all looping levels
@@ -60,13 +59,7 @@ void run_level::run_this_level(FILE *sum_fp)
                 run_josim();                            // Run the JoSIM simulator
                 nodes_of_interest::set_validity(1);     // Now results may make sense (if they ever)
             }
-                
-            for (auto *pp : p_updt_ptrs)  pp->update(); // This may seem like redundant work,
-                                                        // but lacking a real dependency analysis, some
-                                                        // parameters may depend on the outcome of the
-                                                        // simulation via function on NOI's. These need
-                                                        // to be updated with the result of the current sim.
-                                                        // Parameter update functions are fast, so no big deal.
+
             for (auto *ep : s_expr_ptrs)  ep->update();
             
             if (below == nullptr) {
@@ -82,9 +75,6 @@ void run_level::run_this_level(FILE *sum_fp)
         } while ((looping_p_ptr != nullptr) && (looping_p_ptr->next() == 0));
             
         for (auto *ep : s_expr_ptrs)  ep->finalize();
-        
-        for (auto *pp : p_updt_ptrs)  pp->update();     // See above, same reason: here to resolve
-                                                        // Potential dependencies on the finalizers
         
         parameter::list_c_val(sum_fp);
         fprintf(sum_fp, " %u\n", level + 1);
