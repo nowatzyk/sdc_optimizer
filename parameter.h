@@ -30,6 +30,7 @@ protected:
     unsigned        tunable:1;              // If set, will be subject to simulated annealing, BO, etc.
     unsigned        log_map:1;              // Uses logarithmic mapping of tuning range
     unsigned        locked:1;               // Used to detect dependency cycles
+    unsigned        warning_issued:1;       // Used to prevent excessive warnings
 
     // Common:
     double          min_value, max_value;   // Value range
@@ -44,7 +45,7 @@ protected:
               unsigned npr = 0, unsigned tun = 0, unsigned l_map = 1);
 
 public:
-    virtual ~parameter() = default;         // Recommended C++ practice, alas not needed here
+    virtual ~parameter() = default;         // Recommended C++ practice
     
     virtual double get_cur_value() {return NAN;}; // value depends on parameter type
                                             

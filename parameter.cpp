@@ -31,7 +31,8 @@ unsigned parameter::nesting_level = 0;          // = #of looping constructs
 
 parameter::parameter(char* nm, double v_min, double v_max, unsigned npr, unsigned tun, unsigned l_map) : 
     name(nm), type(undefined),
-    no_print(npr), tunable(tun), log_map(l_map), min_value(v_min), max_value(v_max), value(NAN)
+    no_print(npr), tunable(tun), log_map(l_map), locked(0), warning_issued(0),
+    min_value(v_min), max_value(v_max), value(NAN)
 {
     assert(v_min < v_max);
     parameters.push_back(this);         // TBD this needs to be verified
@@ -125,7 +126,7 @@ const_parameter::const_parameter(char* nm, double val, double v_min, double v_ma
 
 double const_parameter::get_mapped_value()
 {
-    double m_val = NAN;             // Default to when the valuse is out of bound
+    double m_val = NAN;             // Default to when the value is out of bound
     
     if ((min_value <= value) && (value <= max_value)) {
         if (log_map)
@@ -191,8 +192,20 @@ double expr_parameter::get_cur_value()
         // Other semantics are possible and may be specified via an attribute.
         // For example set to NAN if the expression is out of bound, or issue a warning, or abort
         //
-        if (new_value < min_value) new_value = min_value;
-        if (new_value > max_value) new_value = max_value;
+        if (new_value < min_value) {
+            new_value = min_value;
+            if (warning_issued == 0) {
+                fprintf(stderr, "Warning: '%s' attempt to set value below range\n", name);
+                warning_issued = 1;
+            }
+        }
+        if (new_value > max_value) {
+            new_value = max_value;
+            if (warning_issued == 0) {
+                fprintf(stderr, "Warning: '%s' attempt to set value above range\n", name);
+                warning_issued = 1;
+            }
+        }
     }
     
     return new_value;

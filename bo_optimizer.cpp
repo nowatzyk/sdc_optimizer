@@ -57,9 +57,9 @@ public:
             p[i] = query[i];
 
         // --- EvalCache lookup ---
-        auto cached = cache.lookup(p.data());
-        if (cached.has_value())
-            return cached.value();
+        double cached = cache.lookup(p.data());
+        if (isfinite(cached))
+            return cached;
 
         // --- Set parameters and call oracle ---
         for (size_t i = 0; i < opt_params.size(); i++)
@@ -134,9 +134,9 @@ void BOOptimizer::run(FILE *result_fp)
         return;
     }
     
-    parameter *ev_ptr = parameter::find_parameter(EVAL_PARAMETER);
+    parameter *ev_ptr = parameter::find_parameter(BAY_OPT_OBJECTIVE);
     if (ev_ptr == nullptr) {
-        fprintf(stderr, "BOOptimizer: objective parameter '%s' not defined\n", EVAL_PARAMETER);
+        fprintf(stderr, "BOOptimizer: objective parameter '%s' not defined\n", BAY_OPT_OBJECTIVE);
         return;
     }
 
@@ -168,8 +168,9 @@ void BOOptimizer::run(FILE *result_fp)
     for (unsigned i = 0; i < n; i++)
         opt_params[i]->set_mapped_value(best_point[i]);
 
-    printf("BOOptimizer: done.  oracle calls=%u  cache hits=%zu  best=%.6g\n",
-           optimizer.n_evals, cache.hits(), optimizer.best_score);
+    printf("BOOptimizer: done.  oracle calls=%u  best=%.6g\n",
+           optimizer.n_evals, optimizer.best_score);
+    cache.print_stats(stdout);
 
     parameter::save_result(result_fp);
 }
