@@ -147,10 +147,11 @@ void BOOptimizer::run(FILE *result_fp)
     // --- BayesOpt parameters ---
     bayesopt::Parameters params;
     params.n_iterations  = n_iterations;
-//  params.noise         = 1e-10;   // near-deterministic: JoSIM is deterministic
-    params.noise         = 1e-4;    // large addition of noise to preven singularity, but also degrades performance
+    params.noise         = 1e-10;   // near-deterministic: JoSIM is deterministic
+//  params.noise         = 1e-4;    // large addition of noise to preven singularity, but also degrades performance
     params.verbose_level = 0;       // suppress BayesOpt's own logging
     params.random_seed = 42;        // fixed seed for reproducibility
+    params.n_init_samples = 50;     // Increased to make it more robust
     
     // --- EvalCache: capacity = next power of 2 above 4x the budget ---
     size_t cache_cap = 1;

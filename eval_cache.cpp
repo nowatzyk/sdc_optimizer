@@ -38,7 +38,8 @@ EvalCache::EvalCache(size_t n_params, size_t size, double eps)
     for (unsigned i = 0; i < log2_cap; i++, hp += n_params)
         for (unsigned j = 0; j < n_params; j++)
             hp[j] = rnd_01d() - 0.5;        // Get a random number in [-0.5,0.5]
-
+            
+    vln_scale = (double) cap * pow(1.0/sqrt((double) n_params), (double) n_params);
 }
 
 EvalCache::~EvalCache()
@@ -67,11 +68,28 @@ unsigned EvalCache::compute_hash(const double *p) const
     for (unsigned i = 0; i < log2_cap; i++, hp += n_params) {
         double s = 0.0;
         for (unsigned j = 0; j < n_params; j++)
-            s += p[j] * hp[j];
+            s += (p[j] - 0.5) * hp[j];
         h = (h << 1) | (s >= 0.0);
     }
-
-    return h ? h : 1;   // disallow 0: it is the empty-slot sentinel
+    
+    //
+    // The following computes the vector lengths sqrt(s) according to the Euclidian vector norm.
+    // It then determins in which hypershere shell the vector ends. The hypersphere in n_param
+    // dimensions with radius equal sqrt(n_params) is subdivided into (cap) shells of equal volume.
+    // The shell # corresponding to the shel where the vector p[] ends is eclusive or-ed into
+    // the hash: this means the cos-similarity is only applied to vectors of roughly equal length.
+    // The equal volume shell constraint means that the hash space is utilized approximatley uniformly.
+    //
+    double s = 0.0;
+    for (unsigned i = 0; i < n_params; i++)
+        s += p[i] * p[i];                   // Compute the length of the p-vector
+    s = vln_scale * pow(s, 0.5 * (double) n_params);
+    unsigned hs = (unsigned) floor(s);
+    if (hs >= cap) hs = cap - 1;    // This can happen only if p[i] = 1.0 for all i
+    
+    h ^= hs;                        // EX-OR the quantified vecor length
+    
+    return h;
 }
 
 // ---------------------------------------------------------------------------

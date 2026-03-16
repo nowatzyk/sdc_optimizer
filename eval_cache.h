@@ -99,6 +99,8 @@ private:
     double   eps_squared;       // cache hit match tolerance ^2
 
     double  *hyper;             // Hyperplanes for the LSH hash function
+    double   vln_scale;         // Vector length normalization scale factor:
+                                // See explanation in compute_hash()
 
     char    *table;             // flat allocation: cap * entry_sz bytes, NAN score initialized
 
