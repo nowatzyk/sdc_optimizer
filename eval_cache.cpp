@@ -9,7 +9,7 @@
 
 #include "xrand.h"
 
-constexpr unsigned MAX_PROBE = 4;       // max number of rehash/match attempts          
+constexpr unsigned MAX_PROBE = 8;       // max number of rehash/match attempts          
 
 // ---------------------------------------------------------------------------
 // Construction / destruction

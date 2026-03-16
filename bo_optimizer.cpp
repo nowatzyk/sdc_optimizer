@@ -78,6 +78,7 @@ public:
         n_evals++;
         if (score < best_score) {
             best_score = score;
+            best_point_found = query;   // store normalized coords
             fprintf(stderr, "BO iter %u: new best = %.6g\n", n_evals, best_score);
         }
 
@@ -94,6 +95,7 @@ public:
 
     unsigned    n_evals;
     double      best_score;
+    vectord best_point_found;
 
 private:
     vector<const_parameter*> &opt_params;
@@ -145,14 +147,18 @@ void BOOptimizer::run(FILE *result_fp)
     // --- BayesOpt parameters ---
     bayesopt::Parameters params;
     params.n_iterations  = n_iterations;
-    params.noise         = 1e-10;   // near-deterministic: JoSIM is deterministic
+//  params.noise         = 1e-10;   // near-deterministic: JoSIM is deterministic
+    params.noise         = 1e-4;    // large addition of noise to preven singularity, but also degrades performance
     params.verbose_level = 0;       // suppress BayesOpt's own logging
-
+    params.random_seed = 42;        // fixed seed for reproducibility
+    
     // --- EvalCache: capacity = next power of 2 above 4x the budget ---
     size_t cache_cap = 1;
     while (cache_cap < (size_t)(n_iterations * 4))
         cache_cap <<= 1;
 
+    cache_cap *= 16;  // Try larger cache
+    
     EvalCache cache(n, cache_cap);
 
     // --- Build and run optimizer ---
@@ -162,8 +168,18 @@ void BOOptimizer::run(FILE *result_fp)
     // No setBoundingBox() call needed.
 
     vectord best_point((size_t) n);
-    optimizer.optimize(best_point);
-
+    try {
+        optimizer.optimize(best_point);
+    } catch (const std::exception &e) {
+        fprintf(stderr, "BOOptimizer: BayesOpt threw: %s\n", e.what());
+        fprintf(stderr, "BOOptimizer: iter=%u best so far=%.6g\n",
+                optimizer.n_evals, optimizer.best_score);
+        // still apply best found so far
+        best_point = optimizer.best_point_found;
+    } catch (...) {
+        fprintf(stderr, "BOOptimizer: BayesOpt threw unknown exception\n");
+    }
+    
     // --- Apply best found parameters ---
     for (unsigned i = 0; i < n; i++)
         opt_params[i]->set_mapped_value(best_point[i]);

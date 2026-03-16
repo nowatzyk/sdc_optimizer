@@ -32,7 +32,7 @@
 // insert in the first. Deterministic choice is important here.
 //
 
-#define DEFAULT_EPS 1.0e-6          // This is the default Euclidian distance between two
+#define DEFAULT_EPS 1.0e-3          // This is the default Euclidian distance between two
                                     // parameter vectors to be consider the same
                                     // This is very conservative and can be overriden in the
                                     // EvalCache constructor.
