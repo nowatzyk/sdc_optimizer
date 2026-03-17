@@ -69,6 +69,7 @@ unsigned EvalCache::compute_hash(const double *p) const
         double s = 0.0;
         for (unsigned j = 0; j < n_params; j++)
             s += (p[j] - 0.5) * hp[j];
+//          s += p[j] * hp[j];          // This would perform worse!
         h = (h << 1) | (s >= 0.0);
     }
     
@@ -80,6 +81,14 @@ unsigned EvalCache::compute_hash(const double *p) const
     // the hash: this means the cos-similarity is only applied to vectors of roughly equal length.
     // The equal volume shell constraint means that the hash space is utilized approximatley uniformly.
     //
+    // Note: the number of possible hashes should correspond to 1/EPS. For example, if the hash uses
+    //       11 bits (2048 possible hashes) good matching with an EPS of 1e-3 results. If the hash
+    //       were to use 14 bits, the expected hit rate for matches within EPS drops to about 60%
+    //       of optimal because the hash quantizes the vector space into smaller parcles than the
+    //       EPS sphere. Points in different hash parcels will not be considered to match, even if their
+    //       distance is less than EPS. So to increase cache capacity, associativity needs to be
+    //       increased rather than using more bits for the hash.
+    //
     double s = 0.0;
     for (unsigned i = 0; i < n_params; i++)
         s += p[i] * p[i];                   // Compute the length of the p-vector
@@ -88,7 +97,7 @@ unsigned EvalCache::compute_hash(const double *p) const
     if (hs >= cap) hs = cap - 1;    // This can happen only if p[i] = 1.0 for all i
     
     h ^= hs;                        // EX-OR the quantified vecor length
-    
+//    printf(" %04x %4d", h, hs);
     return h;
 }
 
@@ -176,4 +185,52 @@ void EvalCache::print_stats(FILE *fp)
 {
     fprintf(fp, "eval-cache: %lu/%lu used, %lu hits, %lu over-flow events\n", 
             n_entries, cap, n_hits, n_overflows);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Cache test/debugging function
+//
+void test_eval_cache(unsigned n_dim, unsigned n_tests, unsigned n_matches, double eps, double eps_fraction)
+    //
+    // n_dim        : number of dimensions
+    // n_tests      : number of tests to be performed, each being one unique vector
+    // n_matches    : number of vectors that ought to match (>= 2)
+    // eps          : EPS for a match
+    // eps_fraction : fraction of EPS to make up a similar vector
+    //
+{
+    EvalCache *evc = new EvalCache(n_dim, 1000, eps);
+    
+    double *p = new double[n_dim];
+    double *s = new double[n_dim];
+    double *p1 = new double[n_dim];
+
+    for (unsigned i = 0; i < n_tests; i++) {
+        
+        // Make up one test vector:
+        for (unsigned j = 0; j < n_dim; j++) {
+            p[j] = rnd_01d();
+            printf(" %.5lf", p[j]);
+        }
+//        printf("->");
+//        evc->store(p, 1.0);
+        
+        for (unsigned k = 0; k < n_matches; k++) {
+            double sum = 0.0;
+            for (unsigned j = 0; j < n_dim; j++) {
+                double t = rnd_01d();
+                sum += t;
+                s[j] = t;
+            }
+            double scale_f = eps * eps_fraction / sqrt(sum);
+            for (unsigned j = 0; j < n_dim; j++)
+                p1[j] = p[j] + scale_f * s[j];
+            
+            evc->store(p1, 2.0 + (double) k);
+        }
+//        printf("\n");
+    }
+    
+    evc->print_stats(stdout);
 }

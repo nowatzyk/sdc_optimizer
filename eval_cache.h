@@ -110,3 +110,5 @@ private:
 
     unsigned compute_hash(const double *p) const;
 };
+
+void test_eval_cache(unsigned n_dim, unsigned n_tests, unsigned n_matches, double eps, double eps_fraction);

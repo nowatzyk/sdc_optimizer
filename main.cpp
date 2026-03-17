@@ -232,6 +232,9 @@ void run_josim()
 int main(int argc, char *argv[])
 {
     rnd_init(0);
+    
+//    test_eval_cache(7, 100, 3, 1.0e-3, 0.9);
+//    exit(1);
 
     // Create the named pipes (FIFO) (unless already present)
     if ((access(csv_out_path, F_OK) != 0) && (mkfifo(csv_out_path, 0666) == -1)) {
