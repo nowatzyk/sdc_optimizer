@@ -55,6 +55,16 @@ EvalCache::~EvalCache()
 // Any hash that computes to 0 is bumped to 1 to preserve the empty-slot sentinel.
 //
 
+//#define _GRID_LSH_HASH_FUNCTION_      // Don't use: it is bad - just an interesting experiment
+//
+// Note: Grid-hashing is clearly worse. I tested it with both random and clustered
+//       artificial point distributions. The scale-factor (see below, left at 500)
+//       relates to EPS and would need to be automated. There is an optimum that
+//       depends on EPS, but I just tried a few and the optimum for EPS = 1e-3 is
+//       somewhere near 200 to 500. No point in further expolration on what that
+//       should be.
+//
+
 unsigned EvalCache::compute_hash(const double *p) const
     //
     // This is a Locality Sensitive Hash (LSH) function that uses the projection
@@ -64,6 +74,15 @@ unsigned EvalCache::compute_hash(const double *p) const
 {
     unsigned h = 0;
     
+#ifdef _GRID_LSH_HASH_FUNCTION_
+    for (unsigned i = 0; i < n_params; i++) {
+        double t = 500.0 * p[i];
+        h ^= (unsigned) nearbyint(t);
+        h = h * 66049u + 3907864577u;
+    }
+    
+    h &= cap - 1;
+#else
     double *hp = hyper;
     for (unsigned i = 0; i < log2_cap; i++, hp += n_params) {
         double s = 0.0;
@@ -98,6 +117,7 @@ unsigned EvalCache::compute_hash(const double *p) const
     
     h ^= hs;                        // EX-OR the quantified vecor length
 //    printf(" %04x %4d", h, hs);
+#endif
     return h;
 }
 
@@ -191,6 +211,10 @@ void EvalCache::print_stats(FILE *fp)
 //
 //  Cache test/debugging function
 //
+//#define _RANDOM_POINT_TEST_           // When defined, just use points normally distributed
+                                        // within the unity cube. If not defined, then points will
+                                        // be clustered near a certain point in the unity cube.
+
 void test_eval_cache(unsigned n_dim, unsigned n_tests, unsigned n_matches, double eps, double eps_fraction)
     //
     // n_dim        : number of dimensions
@@ -206,15 +230,50 @@ void test_eval_cache(unsigned n_dim, unsigned n_tests, unsigned n_matches, doubl
     double *s = new double[n_dim];
     double *p1 = new double[n_dim];
 
+    unsigned n_rejects = 0;
+    
     for (unsigned i = 0; i < n_tests; i++) {
         
         // Make up one test vector:
+#ifdef _RANDOM_POINT_TEST_
         for (unsigned j = 0; j < n_dim; j++) {
             p[j] = rnd_01d();
-            printf(" %.5lf", p[j]);
         }
-//        printf("->");
-//        evc->store(p, 1.0);
+#else
+        // Clustered about (0.75, 0.75, ...., 0.75)
+        
+        // 1. Pick a random direction
+        double sum = 0.0;
+        for (unsigned j = 0; j < n_dim; j++) {
+            double t = rnd_01d();
+            sum += t;
+            s[j] = t;
+        }
+
+        // 2. Normalize direction vector to length 1
+        double scale_f = 1.0 / sqrt(sum);
+        for (unsigned j = 0; j < n_dim; j++)
+            s[j] *= scale_f;
+
+        do {
+            // 3. Pick a random distance from the cluster point using a negative exponential distribution
+            double d = rnd_ned(1.0);    // Adjust lam (here 1.0) to adjust the density of points near the center
+                                        // A larger lam causes more points near the cluster center. Smaller lam
+                                        // means less clustering (and more rejects).
+            unsigned j;
+            for (j = 0; j < n_dim; j++) {
+                double t = 0.75 + s[j] * d;
+                if ((t < 0.0) || (t > 1.0))
+                    break;      // outside of unity volume, try again
+                p[j] = t;
+            }
+            if (j >= n_dim)
+                break;          // Got a valid point
+            n_rejects++;
+        } while (1);
+#endif
+
+        evc->store(p, 1.0);
         
         for (unsigned k = 0; k < n_matches; k++) {
             double sum = 0.0;
@@ -232,5 +291,6 @@ void test_eval_cache(unsigned n_dim, unsigned n_tests, unsigned n_matches, doubl
 //        printf("\n");
     }
     
+    printf("n_rejects = %u\n", n_rejects);
     evc->print_stats(stdout);
 }
