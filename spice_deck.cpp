@@ -6,11 +6,6 @@
 #include <cstring>
 #include <cassert>
 
-extern "C" {
-#include "parser.h"
-#include "lex.yy.h"
-}
-
 extern unsigned yy_n_parse_err;
 extern unsigned n_josim_runs;
 
@@ -135,6 +130,36 @@ int spice_deck::read_cir_file(const char* fn)
     
     return yylineno;
 }
+
+int spice_deck::open_include_file(char* fn)
+//
+// Facility to alow include files. Recursive include files are OK
+//
+{
+    FILE *incl_fp = fopen(fn, "r");
+    free (fn);
+    if (incl_fp == nullptr)
+        return -1;
+
+    include_file_stack.push_back(get_current_buffer());
+    yyin = incl_fp;
+    yy_switch_to_buffer(yy_create_buffer(yyin, YY_BUF_SIZE));
+    return 0;
+}
+
+int spice_deck::yywrap()
+{
+    if (include_file_stack.size() > 0) {
+        fclose(yyin);
+        
+        // Restore previous buffer
+        yy_switch_to_buffer(include_file_stack.back());
+        include_file_stack.pop_back();
+        return 0;
+    }
+    return 1;
+}
+
 
 int spice_deck::write_cir_file(const char* fn)
 //

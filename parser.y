@@ -23,7 +23,7 @@ int yylex(void);
 %token <val> NUMBER
 %type <pointer> expr terminal range opt_range pattern p_time
 %type <flags> attribute attributes
-%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB
+%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB INCLUDE
 %token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT PATTERN FOR
 
 %left TEST_OP OTHERWISE
@@ -48,6 +48,7 @@ line:
     |   COMMENT EOL
     |   TRAN NUMBER NUMBER NUMBER NUMBER EOL { define_tran($2, $3, $4, $5); }
     |   PRAGMA pragma_body EOL
+    |   PRAGMA INCLUDE SYMBOL EOL           { start_include($3); }
     |   EOL                                 { add_new_line_to_spice_deck(); }
     ;
 

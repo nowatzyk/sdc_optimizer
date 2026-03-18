@@ -88,4 +88,5 @@ void *define_le(void *x, void *y);
 void *define_lt(void *x, void *y);
 void *define_not(void *x);
 
+void start_include(char *file_name);
 #endif

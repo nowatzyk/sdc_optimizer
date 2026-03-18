@@ -2,6 +2,14 @@
 
 #include <cstdio>
 #include <cassert>
+#include <vector>
+using namespace std;
+
+extern "C" {
+    #include "parser.h"
+    #include "lex.yy.h"
+    YY_BUFFER_STATE get_current_buffer(void);
+}
 
 class parameter;
 
@@ -46,15 +54,19 @@ public:
 
 class spice_deck {
     spice_elements *first, *last;
-
+    vector<YY_BUFFER_STATE>  include_file_stack;
+    
 public:
     spice_deck();
 
     void add_line     (char *txt);
     void add_param_ref(parameter *par);
     void add_nl       ();
+    
+    int yywrap();                           // Function to teake care of EOF in include files
 
     int  read_cir_file (const char *fn);    // parses and loads; returns line count or -1
+    int  open_include_file(char *fn);       // starts to read from the include file
     int  write_cir_file(const char *fn);    // writes with substituted values; returns 0 or -1
 };
 

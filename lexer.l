@@ -1,10 +1,17 @@
-%option noyywrap nodefault yylineno
+%option nodefault yylineno
 
 %{
 #include "parser.h"   // Bison-generated header
 
 #include <math.h>
 #include "../parser_interf.h"
+
+extern int yywrap();
+
+YY_BUFFER_STATE get_current_buffer(void) {
+    return YY_CURRENT_BUFFER;
+}
+
 %}
 
 %x IN_PRAGMA
@@ -59,6 +66,8 @@
 <IN_PRAGMA>"log_map"        { return LOG_MAP; }
 
 <IN_PRAGMA>"tune"           { return TUNEABLE; }
+
+<IN_PRAGMA>"include"        { return INCLUDE; }
 
 <IN_PRAGMA>[ \t]*   ; // ignore white space
                     

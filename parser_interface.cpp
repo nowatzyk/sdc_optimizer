@@ -600,3 +600,16 @@ void define_pattern(char *name, char *noi, void *p)
         te_ptr = n_ptr;
     }
 }
+
+void start_include(char *file_name)
+{
+    if (circuit.open_include_file(file_name) != 0) {
+        fprintf(stderr, "Line %d: failed to open include file\n", yylineno);
+        yy_n_parse_err++;
+    }
+}
+
+int yywrap()
+{
+    return circuit.yywrap();
+}

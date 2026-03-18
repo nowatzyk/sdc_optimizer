@@ -8,47 +8,49 @@
 //
 // BOOptimizer -- Bayesian Optimisation via BayesOpt's C++ interface.
 //
-// Uses ContinuousModel inheritance -- the natural C++ interface.
+// Two operating modes, selected at construction time:
 //
-// Configuration:
-//   Call BOOptimizer::configure(n_iterations) from the "bo" pragma handler.
-//   The optimisable parameters are those in parameter::get_opt_params()
-//   (the same set used by simulated annealing, i.e. constant_parameters).
+//   MODE_OPTIMIZE  (default)
+//     Minimises the objective function.  Oracle returns a cost (smaller=better).
+//     BayesOpt drives toward the minimum.  Reports the best point found.
+//
+//   MODE_ROBUSTNESS
+//     Maps the feasibility boundary around a known-good starting point x*.
+//     Oracle returns a signed margin: positive=pass, negative=fail, 0=boundary.
+//     A surrogate-gradient straddle search finds the zero-crossing of the GP
+//     mean in each direction, reporting per-parameter margins as +/- %.
+//     x* is captured from get_mapped_value() at run() entry -- it must be set
+//     to the SA (or other) optimum before run() is called.
 //
 // Normalised space:
-//   BayesOpt searches in [0,1]^n.  Each parameter maps this through
-//   parameter::set_normalized_value() / to_normalized() using its own
-//   linear (or log) scale.  The EvalCache also operates in normalised
-//   space for scale-independence.
-//
-// Minimisation:
-//   BayesOpt minimises by default.  The oracle returns eval_expr->get_value()
-//   which the user writes as a cost (smaller = better).
-//   NaN / Inf oracle results are replaced by DBL_MAX.
+//   BayesOpt and the straddle search both work in [0,1]^n.
+//   get_mapped_value() / set_mapped_value() on const_parameter handle
+//   all physical <-> normalised conversion; this class never sees physical units.
 //
 // checkReachability():
-//   Currently returns true for all points.  Once the reject pragma is wired
-//   up, evaluate it here and return false for infeasible points -- this is
-//   more informative to the GP surrogate than NaN -> DBL_MAX substitution.
+//   Currently returns true for all points.  Wire up the reject expression here
+//   once that pragma is available.
 //
 
 class BOOptimizer {
-    //
-    // This is a place-holer at this point.
-    // Here is the place to store parameters extracted from the spice deck
-    //
-    bool        configured;
-    unsigned    n_iterations;
-    parameter   *obj_funct;                         // What to optimiza for (smaller is better)
-    FILE        *sum_fp;
-
 public:
-    BOOptimizer(parameter *obf, unsigned n_it = 190);
+    enum Mode { MODE_OPTIMIZE, MODE_ROBUSTNESS };
+
+    BOOptimizer(parameter *obf, unsigned n_it = 190, Mode mode = MODE_OPTIMIZE);
 
     bool in_use()  { return configured; }
     void run(FILE *result_fp);                      // called from main()
+    void specify_summary_file(FILE *sfp) { sum_fp = sfp; }
 
-    void specify_summary_file(FILE *sfp) {sum_fp = sfp;};
+private:
+    bool        configured;
+    unsigned    n_iterations;
+    Mode        mode;
+    parameter  *obj_funct;                          // objective / margin parameter
+    FILE       *sum_fp;
+
+    void run_optimize   (FILE *result_fp, vector<const_parameter*> &opt_params, unsigned n);
+    void run_robustness (FILE *result_fp, vector<const_parameter*> &opt_params, unsigned n);
 };
 
-extern BOOptimizer *baysian_opt;                    // Pointer to instance when in use
+extern BOOptimizer *baysian_opt;                    // pointer to instance when in use
