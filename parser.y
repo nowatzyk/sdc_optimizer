@@ -22,8 +22,9 @@ int yylex(void);
 %token <text> END LINE SYMBOL PSUBSTITUTION
 %token <val> NUMBER
 %type <pointer> expr terminal range opt_range pattern p_time
-%type <flags> attribute attributes
-%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB INCLUDE
+%type <flags> attribute attributes bo_attributes bo_attribute
+%type <val> bo_n_iter
+%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB INCLUDE MARGIN
 %token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT PATTERN FOR
 
 %left TEST_OP OTHERWISE
@@ -64,11 +65,23 @@ pragma_body:
     |   LSQ_FIT SYMBOL NUMBER COMMA expr COMMA expr  { define_lsq_fit($2, $3, $5, $7); }
     |   SIM_ANNEAL SYMBOL                   { define_sim_anneal($2); }
     |   SA_SCHEDULE NUMBER COMMA NUMBER     { define_add2SA_sched($2, $4); }
-    |   BAYSIAN_OPT                         { define_bo(190.0); }
-    |   BAYSIAN_OPT NUMBER                  { define_bo($2); }
+    |   BAYSIAN_OPT bo_n_iter bo_attributes { define_bo($2, $3); }
     |   PATTERN SYMBOL FOR SYMBOL EQUAL pattern { define_pattern($2, $4, $6); }
     ;
+    
+bo_attributes :                             { $$ = 0; }
+    | bo_attributes bo_attribute            { $$ = $1 | $2; }
+    ;
+    
+bo_attribute :                              // There will be more .. 
+        MARGIN                              { $$ = 1; }
+    ;
+        
 
+bo_n_iter :                                 { $$ = 190.0; }
+    |   NUMBER                              { $$ = $1; }
+    ;
+    
 pattern:
         p_time                              { $$ = $1; }
     |   pattern COMMA p_time                { $$ = define_p_cat($1, $3); }

@@ -290,7 +290,7 @@ void define_sim_anneal(char *log_file_nm)
     sim_anneal_ptr = new sim_anneal(log_file_nm, ev_ptr, parameter::find_parameter(REJECT_PARAMETER));
 }
 
-void define_bo(double n_itr)
+void define_bo(double n_itr, unsigned flags)
 {
     if (baysian_opt != nullptr) {
         fprintf(stderr, "Line %d: Multiple simulated baysian opt directives\n", yylineno);
@@ -298,7 +298,7 @@ void define_bo(double n_itr)
         return;
     }
     
-    if (baysian_opt != nullptr) {
+    if (sim_anneal_ptr != nullptr) {
         fprintf(stderr, "Line %d: Conflicts with simulated annealing\n", yylineno);
         yy_n_parse_err++;
         return;
@@ -318,7 +318,8 @@ void define_bo(double n_itr)
         return;        
     }
     
-    baysian_opt = new BOOptimizer(of_ptr, n);
+    baysian_opt = new BOOptimizer(of_ptr, n,
+                                  (flags & 1) ? BOOptimizer::MODE_ROBUSTNESS : BOOptimizer::MODE_OPTIMIZE );
 }
 
 void define_add2SA_sched(double temp, double n_iter)

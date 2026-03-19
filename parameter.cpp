@@ -151,7 +151,7 @@ void const_parameter::set_mapped_value(double m_val)
 
 void const_parameter::print_self(FILE* fp)
 {
-    fprintf(fp, "*pragma parameter %s := %.12lg", name, value);
+    fprintf(fp, "*Pragma parameter %s := %.12lg", name, value);
     if ((min_value != -__DBL_MAX__) && (max_value != __DBL_MAX__))
         fprintf(fp, " [%.12lg, %.12lg]", min_value, max_value);
     if (tunable != 0)

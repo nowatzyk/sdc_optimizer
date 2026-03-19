@@ -132,13 +132,15 @@ public:
     double surrogate_mean(const vectord &x)
     {
         bayesopt::ProbabilityDistribution *pd = getPrediction(x);
-        return pd->getMean();
+        double m = pd->getMean();
+        return isfinite(m) ? m : 0.0;               // treat degenerate prediction as boundary
     }
 
     double surrogate_std(const vectord &x)
     {
         bayesopt::ProbabilityDistribution *pd = getPrediction(x);
-        return pd->getStd();
+        double s = pd->getStd();
+        return (isfinite(s) && s >= 0.0) ? s : 1.0;  // treat as maximally uncertain
     }
 
     // Straddle acquisition: β·σ(x) - |μ(x)|  (threshold=0, maximise this)
@@ -223,12 +225,12 @@ BOOptimizer::BOOptimizer(parameter *obf, unsigned n_it, Mode m)
 // Shared helpers
 //
 
-static bayesopt::Parameters make_bo_params(unsigned n_iter, unsigned n_init)
+static bayesopt::Parameters make_bo_params(unsigned n_iter, unsigned n_init, double noise = 1e-10)
 {
     bayesopt::Parameters p;
     p.n_iterations  = n_iter;
     p.n_init_samples = n_init;
-    p.noise         = 1e-10;
+    p.noise         = noise;
     p.verbose_level = 0;
     p.random_seed   = 42;
     return p;
@@ -323,7 +325,7 @@ void BOOptimizer::run_robustness(FILE *result_fp,
     }
 
     // --- BayesOpt params: 1 init sample (x* itself), rest are straddle-guided ---
-    auto params = make_bo_params(n_iterations, 1);
+    auto params = make_bo_params(n_iterations, 1, 1e-4);
     EvalCache cache(n, cache_capacity(n_iterations));
 
     JoSimBO optimizer(params, opt_params, cache, sum_fp,

@@ -142,6 +142,8 @@ int spice_deck::open_include_file(char* fn)
         return -1;
 
     include_file_stack.push_back(get_current_buffer());
+    include_line_no_stk.push_back(yylineno);
+    yylineno = 1;
     yyin = incl_fp;
     yy_switch_to_buffer(yy_create_buffer(yyin, YY_BUF_SIZE));
     return 0;
@@ -154,7 +156,9 @@ int spice_deck::yywrap()
         
         // Restore previous buffer
         yy_switch_to_buffer(include_file_stack.back());
+        yylineno = include_line_no_stk.back();
         include_file_stack.pop_back();
+        include_line_no_stk.pop_back();
         return 0;
     }
     return 1;

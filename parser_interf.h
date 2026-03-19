@@ -62,7 +62,7 @@ void define_add2SA_sched(double temp, double n_iter);
 void define_monitor(char *name);
 void define_snapshot(char *name, double start, double frequency);
 void define_lsq_fit(char *name, double order, void *x, void *y);
-void define_bo(double n_itr);
+void define_bo(double n_itr, unsigned flags);
 
 void *define_range(double from, double to);
 

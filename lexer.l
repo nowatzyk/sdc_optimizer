@@ -52,6 +52,7 @@ YY_BUFFER_STATE get_current_buffer(void) {
 <IN_PRAGMA>"for"            { return FOR; }
 
 <IN_PRAGMA>"baysian_opt"    { return BAYSIAN_OPT; }
+<IN_PRAGMA>"margin"         { return MARGIN; }
 
 <IN_PRAGMA>"parameter"      { return PARAMETER; }
 

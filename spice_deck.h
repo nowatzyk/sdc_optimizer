@@ -55,6 +55,7 @@ public:
 class spice_deck {
     spice_elements *first, *last;
     vector<YY_BUFFER_STATE>  include_file_stack;
+    vector<int>              include_line_no_stk;
     
 public:
     spice_deck();
