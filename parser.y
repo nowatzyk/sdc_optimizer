@@ -70,7 +70,7 @@ pragma_body:
     ;
     
 bo_attributes :                             { $$ = 0; }
-    | bo_attributes bo_attribute            { $$ = $1 | $2; }
+    |   bo_attributes bo_attribute          { $$ = $1 | $2; }
     ;
     
 bo_attribute :                              // There will be more .. 

@@ -691,11 +691,18 @@ unsigned time_pattern::cnt_missmatches(vector<double>& t_ev)
         //
         unsigned event_count = 0;
         
-        while ((t_event < tn) && (ec < t_ev.size())) {
+        do {
+            if ((t_event >= tn) && (t_event < tnp1))
+                event_count++;          // The event is in the current interval
+                
+            if (t_event >= tnp1)
+                break;                  // Event is beyond the current interval
+                
+            if (ec >= t_ev.size())
+                break;                  // No more events
+
             t_event = t_ev[ec++];
-            if ((t_event >= tn) && (t_event < tnp1)) event_count++;
-            if (t_event >= tnp1) break;
-        }
+        } while (t_event < tnp1);       // Consume all events that ocurred before the end of this interval
         
         if (events_expected != event_count) n_mismatches++;
         
@@ -711,6 +718,12 @@ unsigned time_pattern::cnt_missmatches(vector<double>& t_ev)
 double match_peaks  (void *obj_ptr, double x)
 //
 // Locates all peaks for a given NOI and checks them against a time pattern
+//
+// 0 is returned for a perfect match. For each instance where the expected # of peaks
+// in a time interval differs from the actual number, a 1 is added to the result. So higher
+// return values mean less good matches.
+//
+// The argument <x> is currently not used.
 //
 {
     if (!nodes_of_interest::is_valid())

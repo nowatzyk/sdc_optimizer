@@ -510,8 +510,8 @@ void *define_p_cat(void *p1, void *p2)
 {
     struct p_time_element *t_ptr = (struct p_time_element *) p1;
     while (t_ptr->next != nullptr)          // finds the end of the list
-        t_ptr->next = t_ptr;
-    t_ptr = (struct p_time_element *) p2;
+        t_ptr = t_ptr->next;
+    t_ptr->next = (struct p_time_element *) p2;
     return p1;
 }
 
@@ -528,7 +528,7 @@ void *define_p_term(unsigned rel, double t)
     }
     
     if (rel) t_ptr->time = -t;
-    else     t_ptr->time = -t;
+    else     t_ptr->time =  t;
     
     return t_ptr;
 }
