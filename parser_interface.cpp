@@ -290,38 +290,6 @@ void define_sim_anneal(char *log_file_nm)
     sim_anneal_ptr = new sim_anneal(log_file_nm, ev_ptr, parameter::find_parameter(REJECT_PARAMETER));
 }
 
-void define_bo(double n_itr, unsigned flags)
-{
-    if (baysian_opt != nullptr) {
-        fprintf(stderr, "Line %d: Multiple simulated baysian opt directives\n", yylineno);
-        yy_n_parse_err++;
-        return;
-    }
-    
-    if (sim_anneal_ptr != nullptr) {
-        fprintf(stderr, "Line %d: Conflicts with simulated annealing\n", yylineno);
-        yy_n_parse_err++;
-        return;
-    }
-    
-    if (n_itr < 1.0) {
-        fprintf(stderr, "Line %d: Bad number of iterations\n", yylineno);
-        yy_n_parse_err++;
-        return;
-    }
-    unsigned n = (unsigned) nearbyint(n_itr);
-    
-    parameter *of_ptr = parameter::find_parameter(BAY_OPT_OBJECTIVE);
-    if (nullptr == of_ptr) {
-        fprintf(stderr, "Line %d: '%s' paramter missing\n", yylineno, BAY_OPT_OBJECTIVE);
-        yy_n_parse_err++;
-        return;        
-    }
-    
-    baysian_opt = new BOOptimizer(of_ptr, n,
-                                  (flags & 1) ? BOOptimizer::MODE_ROBUSTNESS : BOOptimizer::MODE_OPTIMIZE );
-}
-
 void define_add2SA_sched(double temp, double n_iter)
 {
     if (sim_anneal_ptr == nullptr) {
@@ -338,6 +306,134 @@ void define_add2SA_sched(double temp, double n_iter)
     
     unsigned n = (unsigned) nearbyint(n_iter);
     sim_anneal_ptr->add_sa_sched(temp, n);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// BO attribute linked-list support
+// ----------------------------------
+// The parser builds a linked list of bo_attr nodes as it reads the baysian_opt
+// pragma.  define_bo() walks the list to extract all settings, applying
+// defaults for anything not specified, then frees the list.
+//
+// Example pragmas:
+//   * *Pragma baysian_opt 300 margin binary n_rays 16 n_bisect 20
+//   * *Pragma baysian_opt 500 margin gradient threshold 0.5
+//   * *Pragma baysian_opt 200                              (optimize mode, no margin)
+//
+
+void *define_bo_attr(int type, double value)
+// Allocates a single bo_attr node.  Called by the parser for each keyword seen.
+{
+    struct bo_attr *a = (struct bo_attr *) malloc(sizeof(struct bo_attr));
+    a->type  = (bo_attr_type) type;
+    a->value = value;
+    a->next  = nullptr;
+    return a;
+}
+
+void *bo_attr_cat(void *list, void *node)
+// Appends node to the end of list (or returns node if list is NULL).
+// Mirrors define_p_cat() for pattern elements.
+{
+    if (list == nullptr)
+        return node;
+    struct bo_attr *p = (struct bo_attr *) list;
+    while (p->next != nullptr)
+        p = p->next;
+    p->next = (struct bo_attr *) node;
+    return list;
+}
+
+void define_bo(double n_itr, void *attr_list)
+// Main BO pragma handler.  Walks the attribute list to determine mode and
+// numeric parameters, applies defaults, then constructs the BOOptimizer.
+// Always frees the attribute list before returning.
+{
+    if (baysian_opt != nullptr) {
+        fprintf(stderr, "Line %d: Multiple baysian_opt directives\n", yylineno);
+        yy_n_parse_err++;
+        goto cleanup;
+    }
+    
+    if (sim_anneal_ptr != nullptr) {
+        fprintf(stderr, "Line %d: Conflicts with simulated annealing\n", yylineno);
+        yy_n_parse_err++;
+        goto cleanup;
+    }
+    
+    if (n_itr < 1.0) {
+        fprintf(stderr, "Line %d: Bad number of iterations\n", yylineno);
+        yy_n_parse_err++;
+        goto cleanup;
+    }
+
+    {
+        // --- Extract settings from attribute list, applying defaults ---
+        BOOptimizer::Mode    mode    = BOOptimizer::MODE_OPTIMIZE;   // default: no margin analysis
+        BOOptimizer::SubMode submode = BOOptimizer::SUBMODE_BINARY;  // default submode if margin set
+        bool     margin_seen        = false;
+        unsigned n_rays             = 0;     // 0 = auto (4 * n_params)
+        unsigned n_bracket          = 10;    // bracket search steps per ray
+        unsigned n_bisect           = 20;    // bisection steps per ray
+        double   threshold          = 0.0;   // pass/fail boundary value
+
+        for (struct bo_attr *a = (struct bo_attr *) attr_list; a != nullptr; a = a->next) {
+            switch (a->type) {
+                case BO_ATTR_MARGIN:
+                    // "margin" alone enables robustness mode with default submode
+                    mode = BOOptimizer::MODE_ROBUSTNESS;
+                    margin_seen = true;
+                    break;
+                case BO_ATTR_BINARY:
+                    submode = BOOptimizer::SUBMODE_BINARY;
+                    if (!margin_seen) mode = BOOptimizer::MODE_ROBUSTNESS;
+                    break;
+                case BO_ATTR_GRADIENT:
+                    submode = BOOptimizer::SUBMODE_GRADIENT;
+                    if (!margin_seen) mode = BOOptimizer::MODE_ROBUSTNESS;
+                    break;
+                case BO_ATTR_PROBABILISTIC:
+                    submode = BOOptimizer::SUBMODE_PROBABILISTIC;
+                    if (!margin_seen) mode = BOOptimizer::MODE_ROBUSTNESS;
+                    break;
+                case BO_ATTR_N_RAYS:
+                    n_rays = (unsigned) nearbyint(a->value);
+                    break;
+                case BO_ATTR_N_BRACKET:
+                    n_bracket = (unsigned) nearbyint(a->value);
+                    break;
+                case BO_ATTR_N_BISECT:
+                    n_bisect = (unsigned) nearbyint(a->value);
+                    break;
+                case BO_ATTR_THRESHOLD:
+                    threshold = a->value;
+                    break;
+            }
+        }
+
+        parameter *of_ptr = parameter::find_parameter(BAY_OPT_OBJECTIVE);
+        if (nullptr == of_ptr) {
+            fprintf(stderr, "Line %d: '%s' parameter missing\n", yylineno, BAY_OPT_OBJECTIVE);
+            yy_n_parse_err++;
+            goto cleanup;
+        }
+
+        unsigned n = (unsigned) nearbyint(n_itr);
+        baysian_opt = new BOOptimizer(of_ptr, n, mode, submode,
+                                      n_rays, n_bracket, n_bisect, threshold);
+    }
+
+cleanup:
+    // Free the attribute list regardless of success or failure
+    {
+        struct bo_attr *a = (struct bo_attr *) attr_list;
+        while (a != nullptr) {
+            struct bo_attr *next = a->next;
+            free(a);
+            a = next;
+        }
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

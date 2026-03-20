@@ -42,6 +42,29 @@ extern struct units unit_table[];           // Common SI scale identifiers
 
 extern unsigned  yy_n_parse_err;            // #of errors during parsing the circuit file
 
+//
+// bo_attr -- BO pragma attribute node, built into a linked list by the parser.
+// One node per keyword seen in the baysian_opt pragma line.
+// Passed as void* through the Bison grammar (C-compatible) to define_bo().
+//
+
+typedef enum {
+    BO_ATTR_MARGIN,         // enable robustness / margin analysis mode
+    BO_ATTR_BINARY,         // submode: binary pass/fail oracle (+1/-1)
+    BO_ATTR_GRADIENT,       // submode: continuous oracle with gradient
+    BO_ATTR_PROBABILISTIC,  // submode: stochastic oracle (error rate)
+    BO_ATTR_N_RAYS,         // number of rays from x* for boundary search
+    BO_ATTR_N_BRACKET,      // bracket search steps per ray
+    BO_ATTR_N_BISECT,       // bisection steps per ray
+    BO_ATTR_THRESHOLD       // pass/fail boundary value (default 0.0)
+} bo_attr_type;
+
+struct bo_attr {
+    bo_attr_type    type;
+    double          value;
+    struct bo_attr *next;
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // 
 // Parser interface functions
@@ -56,15 +79,18 @@ void define_tran(double t_incr, double t_stop, double t_start, double dT_max);
 void define_param_scan(char *name, void *rng, double n_steps, unsigned flags);
 void define_param_constant(char *name, double value, void *rng, unsigned flags);
 void define_param_expression(char *name, void *expr, void *rng, unsigned flags);
+void *define_range(double from, double to);
 
 void define_sim_anneal(char *log_file_nm);
 void define_add2SA_sched(double temp, double n_iter);
+
 void define_monitor(char *name);
 void define_snapshot(char *name, double start, double frequency);
 void define_lsq_fit(char *name, double order, void *x, void *y);
-void define_bo(double n_itr, unsigned flags);
 
-void *define_range(double from, double to);
+void define_bo(double n_itr, void *attr_list);
+void *bo_attr_cat(void *list, void *node);
+void *define_bo_attr(int type, double value);
 
 void define_pattern(char *name, char *noi, void *p);
 void *define_p_cat(void *p1, void *p2);

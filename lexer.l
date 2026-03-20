@@ -52,7 +52,16 @@ YY_BUFFER_STATE get_current_buffer(void) {
 <IN_PRAGMA>"for"            { return FOR; }
 
 <IN_PRAGMA>"baysian_opt"    { return BAYSIAN_OPT; }
+
 <IN_PRAGMA>"margin"         { return MARGIN; }
+<IN_PRAGMA>"binary"         { return BO_BINARY; }
+<IN_PRAGMA>"gradient"       { return BO_GRADIENT; }
+<IN_PRAGMA>"probabilistic"  { return BO_PROBABILISTIC; }
+
+<IN_PRAGMA>"n_rays"         { return BO_N_RAYS; }
+<IN_PRAGMA>"n_bracket"      { return BO_N_BRACKET; }
+<IN_PRAGMA>"n_bisect"       { return BO_N_BISECT; }
+<IN_PRAGMA>"threshold"      { return BO_THRESHOLD; }
 
 <IN_PRAGMA>"parameter"      { return PARAMETER; }
 

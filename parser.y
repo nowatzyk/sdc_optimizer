@@ -21,11 +21,13 @@ int yylex(void);
     
 %token <text> END LINE SYMBOL PSUBSTITUTION
 %token <val> NUMBER
-%type <pointer> expr terminal range opt_range pattern p_time
-%type <flags> attribute attributes bo_attributes bo_attribute
+%type <pointer> expr terminal range opt_range pattern p_time bo_attr_list bo_attr
+%type <flags> attribute attributes
 %type <val> bo_n_iter
-%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB INCLUDE MARGIN
+%token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB INCLUDE
 %token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT PATTERN FOR
+%token MARGIN BO_BINARY BO_GRADIENT BO_PROBABILISTIC
+%token BO_N_RAYS BO_N_BRACKET BO_N_BISECT BO_THRESHOLD
 
 %left TEST_OP OTHERWISE
 %left COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
@@ -65,18 +67,33 @@ pragma_body:
     |   LSQ_FIT SYMBOL NUMBER COMMA expr COMMA expr  { define_lsq_fit($2, $3, $5, $7); }
     |   SIM_ANNEAL SYMBOL                   { define_sim_anneal($2); }
     |   SA_SCHEDULE NUMBER COMMA NUMBER     { define_add2SA_sched($2, $4); }
-    |   BAYSIAN_OPT bo_n_iter bo_attributes { define_bo($2, $3); }
+    |   BAYSIAN_OPT bo_n_iter bo_attr_list  { define_bo($2, $3); }
     |   PATTERN SYMBOL FOR SYMBOL EQUAL pattern { define_pattern($2, $4, $6); }
     ;
-    
-bo_attributes :                             { $$ = 0; }
-    |   bo_attributes bo_attribute          { $$ = $1 | $2; }
+
+//
+// BO attribute list -- a linked list of bo_attr nodes built left-to-right.
+// Passed as a single void* to define_bo(), which walks the list to extract
+// all settings, applying defaults for anything not specified.
+//
+bo_attr_list :                              { $$ = NULL; }
+    |   bo_attr_list bo_attr                { $$ = bo_attr_cat($1, $2); }
     ;
-    
-bo_attribute :                              // There will be more .. 
-        MARGIN                              { $$ = 1; }
+
+//
+// Individual BO attributes.  Mode keywords carry no value (0.0 placeholder).
+// Numeric keywords carry their value directly.
+//
+bo_attr :
+        MARGIN                             { $$ = define_bo_attr(BO_ATTR_MARGIN,       0.0); }
+    |   BO_BINARY                          { $$ = define_bo_attr(BO_ATTR_BINARY,       0.0); }
+    |   BO_GRADIENT                        { $$ = define_bo_attr(BO_ATTR_GRADIENT,     0.0); }
+    |   BO_PROBABILISTIC                   { $$ = define_bo_attr(BO_ATTR_PROBABILISTIC,0.0); }
+    |   BO_N_RAYS     NUMBER               { $$ = define_bo_attr(BO_ATTR_N_RAYS,       $2); }
+    |   BO_N_BRACKET  NUMBER               { $$ = define_bo_attr(BO_ATTR_N_BRACKET,    $2); }
+    |   BO_N_BISECT   NUMBER               { $$ = define_bo_attr(BO_ATTR_N_BISECT,     $2); }
+    |   BO_THRESHOLD  NUMBER               { $$ = define_bo_attr(BO_ATTR_THRESHOLD,    $2); }
     ;
-        
 
 bo_n_iter :                                 { $$ = 190.0; }
     |   NUMBER                              { $$ = $1; }
