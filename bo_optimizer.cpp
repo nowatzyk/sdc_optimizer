@@ -29,15 +29,9 @@ BOOptimizer *baysian_opt = nullptr;
 //
 // JoSimBO -- ContinuousModel subclass wrapping loop_complex.run_once().
 //
-// In OPTIMIZE   mode: evaluateSample() returns the raw cost score (minimised).
-// In ROBUSTNESS mode: evaluateSample() returns -score so that BayesOpt's
-//                     internal machinery stays valid during init, but the real
-//                     boundary search is driven externally using getPrediction()
-//                     directly -- BayesOpt just manages the GP surrogate.
-//
-// The binary submode (run_binary) uses this class only for the GP and the
-// direct oracle call helper (call_oracle), not for BayesOpt's acquisition
-// function -- the ray-bisection search drives all evaluation directly.
+// Used only by MODE_OPTIMIZE and SUBMODE_GRADIENT.
+// SUBMODE_BINARY drives oracle calls directly via eval_point() lambda and
+// does not use the GP surrogate at all.
 //
 
 class JoSimBO : public bayesopt::ContinuousModel {
@@ -68,13 +62,10 @@ public:
     void generateInitialPoints(matrixd &xPoints) override
     {
         if (x_star.size() == mDims) {
-            // Use x* as the sole initial point -- the GP is anchored there
-            // from the very first iteration.
             xPoints.resize(1, mDims);
             for (size_t i = 0; i < mDims; i++)
                 xPoints(0, i) = x_star[i];
         } else {
-            // Fallback: let BayesOpt choose initial points normally
             ContinuousModel::generateInitialPoints(xPoints);
         }
     }
@@ -87,12 +78,10 @@ public:
         for (size_t i = 0; i < query.size(); i++)
             p[i] = query[i];
 
-        // --- EvalCache lookup ---
         double cached = cache.lookup(p.data());
         if (isfinite(cached))
             return cached;
 
-        // --- Set parameters and call oracle ---
         for (size_t i = 0; i < opt_params.size(); i++)
             opt_params[i]->set_mapped_value(query[i]);
 
@@ -104,7 +93,6 @@ public:
 
         // In robustness mode BayesOpt sees negated score so its minimiser
         // is consistent: pass (positive margin) -> negative -> BayesOpt happy.
-        // The raw score (margin) is what we cache and report.
         double bo_score = (mode == ROBUSTNESS) ? -score : score;
 
         cache.store(p.data(), bo_score);
@@ -114,46 +102,14 @@ public:
             best_score       = bo_score;
             best_point_found = query;
             if (mode == OPTIMIZE)
-                fprintf(stderr, "BO iter %u: new best = %.6g\n", n_evals, best_score);
+                fprintf(stderr, "BO iter %u: new best = %.6g\n",
+                        n_evals, best_score);
             else
-                fprintf(stderr, "BO iter %u: margin = %.6g\n", n_evals, score);
+                fprintf(stderr, "BO iter %u: margin = %.6g\n",
+                        n_evals, score);
         }
 
         return bo_score;
-    }
-
-    //
-    // call_oracle() -- direct oracle call bypassing BayesOpt's machinery.
-    // Used by run_binary() to evaluate arbitrary points during ray-bisection
-    // without going through evaluateSample().  Caches the result.
-    // Returns the raw score (positive=pass, negative=fail).
-    //
-    double call_oracle(const vectord &query)
-    {
-        assert(query.size() == opt_params.size());
-
-        vector<double> p(query.size());
-        for (size_t i = 0; i < query.size(); i++)
-            p[i] = query[i];
-
-        // Check cache first (avoids re-running JoSIM at already-visited points)
-        double cached = cache.lookup(p.data());
-        if (isfinite(cached))
-            return cached;     // cache stores raw score in binary mode
-
-        for (size_t i = 0; i < opt_params.size(); i++)
-            opt_params[i]->set_mapped_value(query[i]);
-
-        loop_complex.run_once(sum_fp);
-        double score = eval_ptr->get_cur_value();
-
-        if (!isfinite(score))
-            score = -DBL_MAX;   // treat non-finite as deep fail
-
-        cache.store(p.data(), score);
-        n_evals++;
-
-        return score;
     }
 
     bool checkReachability(const vectord &query) override
@@ -164,36 +120,30 @@ public:
 
     //
     // Surrogate query helpers -- used by the gradient straddle search.
-    // These call getPrediction() which is free (no oracle call).
     //
 
     double surrogate_mean(const vectord &x)
     {
         bayesopt::ProbabilityDistribution *pd = getPrediction(x);
         double m = pd->getMean();
-        return isfinite(m) ? m : 0.0;              // treat degenerate prediction as boundary
+        return isfinite(m) ? m : 0.0;
     }
 
     double surrogate_std(const vectord &x)
     {
         bayesopt::ProbabilityDistribution *pd = getPrediction(x);
         double s = pd->getStd();
-        return (isfinite(s) && s >= 0.0) ? s : 1.0; // treat as maximally uncertain
+        return (isfinite(s) && s >= 0.0) ? s : 1.0;
     }
 
-    // Straddle acquisition: beta*sigma(x) - |mu(x)|  (threshold=0, maximise this).
-    // Large value = uncertain AND close to boundary = most informative point.
     double straddle(const vectord &x, double beta = 1.96)
     {
         bayesopt::ProbabilityDistribution *pd = getPrediction(x);
         return beta * pd->getStd() - fabs(pd->getMean());
     }
 
-    // Finite-difference gradient of surrogate mean toward zero crossing.
-    // Returns the normalised step direction and the gradient magnitude.
-    // Step direction moves from x toward the boundary (sign chosen to reduce |mu(x)|).
-    // Costs 2*n GP queries, zero oracle calls.
-    vectord boundary_gradient(const vectord &x, double &grad_mag, double h = 1e-3)
+    vectord boundary_gradient(const vectord &x, double &grad_mag,
+                              double h = 1e-3)
     {
         size_t n = x.size();
         vectord grad(n), xp(x), xm(x);
@@ -202,7 +152,7 @@ public:
         for (size_t i = 0; i < n; i++) {
             xp[i] = min(1.0, x[i] + h);
             xm[i] = max(0.0, x[i] - h);
-            double actual_h = xp[i] - xm[i];   // handles boundary clamping
+            double actual_h = xp[i] - xm[i];
             grad[i] = (surrogate_mean(xp) - surrogate_mean(xm)) / actual_h;
             xp[i] = x[i];
             xm[i] = x[i];
@@ -213,14 +163,12 @@ public:
             grad_mag += grad[i] * grad[i];
         grad_mag = sqrt(grad_mag);
 
-        // Move in -sign(mu)*grad direction to reduce |mu| (toward zero crossing)
         vectord direction(n);
         double sign_mu = (mu0 >= 0.0) ? 1.0 : -1.0;
         if (grad_mag > 1e-12) {
             for (size_t i = 0; i < n; i++)
                 direction[i] = -sign_mu * grad[i] / grad_mag;
         } else {
-            // Flat region: pick an axis-aligned direction to avoid stalling
             for (size_t i = 0; i < n; i++)
                 direction[i] = (i == (n_evals % n)) ? 1.0 : 0.0;
         }
@@ -228,11 +176,10 @@ public:
         return direction;
     }
 
-    // Public state
     unsigned    n_evals;
     double      best_score;
     vectord     best_point_found;
-    vectord     x_star;             // known-good starting point, set before optimize()
+    vectord     x_star;
 
 private:
     vector<const_parameter*> &opt_params;
@@ -292,41 +239,34 @@ static size_t cache_capacity(unsigned n_iter)
     return cap * 16;
 }
 
-// Clip a normalised coordinate to [0,1]
 static inline double clip01(double x) { return fmax(0.0, fmin(1.0, x)); }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Per-parameter margin extraction -- shared by both robustness submodes.
-//
-// Walks each parameter axis from x* along the GP surrogate mean to find
-// where it crosses threshold.  Cheap (GP queries only, no oracle calls).
-// Reports lo_margin and hi_margin in normalised space plus a percentage.
+// GP-based per-parameter margin extraction -- used by SUBMODE_GRADIENT only.
 //
 
-static void report_margins(JoSimBO &optimizer,
-                            const vectord &x_star,
-                            vector<const_parameter*> &opt_params,
-                            unsigned n,
-                            double threshold,
-                            double step0 = 0.01,
-                            unsigned n_bisect = 32)
+static void report_margins_gp(JoSimBO &optimizer,
+                               const vectord &x_star,
+                               vector<const_parameter*> &opt_params,
+                               unsigned n,
+                               double threshold,
+                               double step0    = 0.01,
+                               unsigned n_bisect = 32)
 {
-    printf("\nBOOptimizer[robustness]: margin analysis from x*\n");
+    printf("\nBOOptimizer[gradient]: margin analysis from x* (GP surrogate)\n");
     printf("%-20s  %8s  %8s  %8s  %8s\n",
-           "parameter", "value", "lo_margin", "hi_margin", "margin_%");
+           "parameter", "norm_val", "lo_margin", "hi_margin", "margin_%");
 
     for (unsigned i = 0; i < n; i++) {
         double xi_star = x_star[i];
         vectord x_probe = x_star;
 
-        // --- Walk upward to find upper boundary bracket ---
-        double hi_cross = 1.0;          // assume passes to the upper bound unless proven otherwise
+        double hi_cross = 1.0;
         bool   hi_found = false;
         for (double t = xi_star + step0; t <= 1.0; t += step0) {
             x_probe[i] = t;
             if (optimizer.surrogate_mean(x_probe) <= threshold) {
-                // Bracket found: bisect between t-step0 and t
                 double lo_b = t - step0, hi_b = t;
                 for (unsigned k = 0; k < n_bisect; k++) {
                     double mid = (lo_b + hi_b) / 2.0;
@@ -343,8 +283,7 @@ static void report_margins(JoSimBO &optimizer,
         }
         x_probe[i] = xi_star;
 
-        // --- Walk downward to find lower boundary bracket ---
-        double lo_cross = 0.0;          // assume passes to the lower bound unless proven otherwise
+        double lo_cross = 0.0;
         bool   lo_found = false;
         for (double t = xi_star - step0; t >= 0.0; t -= step0) {
             x_probe[i] = t;
@@ -365,13 +304,13 @@ static void report_margins(JoSimBO &optimizer,
         }
         x_probe[i] = xi_star;
 
-        double lo_margin_norm = xi_star - lo_cross;
-        double hi_margin_norm = hi_cross - xi_star;
-        double margin_pct     = 100.0 * (hi_cross - lo_cross) / 2.0;
+        double lo_margin = xi_star - lo_cross;
+        double hi_margin = hi_cross - xi_star;
+        double margin_pct = 100.0 * (lo_margin + hi_margin) / 2.0;
 
         printf("%-20s  %8.4f  %8.4f  %8.4f  %7.2f%%%s%s\n",
                opt_params[i]->get_name(),
-               xi_star, lo_margin_norm, hi_margin_norm, margin_pct,
+               xi_star, lo_margin, hi_margin, margin_pct,
                lo_found ? "" : "  (lo bound not found)",
                hi_found ? "" : "  (hi bound not found)");
     }
@@ -416,209 +355,31 @@ void BOOptimizer::run_optimize(FILE *result_fp,
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// SUBMODE_BINARY -- ray-bisection boundary search from x*
+// SUBMODE_BINARY -- iterative ray-bisection boundary search with centre relocation
 //
-// The oracle returns a signed value with threshold at 0: positive=pass, negative=fail.
-// For a digital circuit this is typically +1/-1 exactly.
+// Runs n_rounds = n_relocate+1 rounds of ray-bisection from an evolving centre.
+// After each round the centroid of all accumulated boundary points becomes
+// the new centre, progressively relocating toward the geometric centre of
+// the feasibility region.
 //
-// Strategy:
-//   For each of n_rays directions from x* (axis-aligned plus random diagonals):
-//     1. Step outward along the ray until the oracle returns fail (bracket found).
-//     2. Bisect within the bracket to locate the zero crossing precisely.
-//     3. Record the boundary point in the GP via evaluateSample().
-//   After all rays, use the GP mean zero-crossing walk for per-parameter margins.
+// Budget notes:
+//   The total oracle call budget is n_iterations.  The cache is shared across
+//   all rounds, so repeated bisection near the same boundary is cheap.
+//   actual_n_rays is set to fit the TOTAL budget (not per-round), since later
+//   rounds reuse cached evaluations heavily.
+//   n_relocate is currently hardcoded to 3 -- will become a pragma parameter.
 //
-// Budget:
-//   n_rays * (n_bracket + n_bisect) oracle calls total.
-//   If this exceeds n_iterations, n_rays is reduced to fit.
-//   Auto n_rays (n_rays==0): defaults to 4*n, covering all axis-aligned directions
-//   plus 2*n random diagonal directions.
+// Bug fixes vs previous version:
+//   - Budget is total not per-round (no longer divides by n_rounds)
+//   - t_pass=0 is a valid bracket start (first step fails = boundary is
+//     between 0 and step0); bisection now always runs when t_fail >= 0
+//   - Boundary point is recorded at t_pass (last confirmed pass), never
+//     at x_centre itself unless t_pass genuinely equals 0
 //
 
 void BOOptimizer::run_binary(FILE *result_fp,
                              vector<const_parameter*> &opt_params,
                              unsigned n)
-{
-    // --- Capture x* ---
-    vectord x_star((size_t) n);
-    for (unsigned i = 0; i < n; i++)
-        x_star[i] = opt_params[i]->get_mapped_value();
-
-    // Verify x* passes
-    {
-        for (unsigned i = 0; i < n; i++)
-            opt_params[i]->set_mapped_value(x_star[i]);
-        loop_complex.run_once(sum_fp);
-        double margin_star = obj_funct->get_cur_value();
-        if (margin_star <= threshold) {
-            fprintf(stderr,
-                "BOOptimizer[binary]: WARNING: starting point score=%.6g does not pass threshold=%.6g\n",
-                margin_star, threshold);
-        } else {
-            fprintf(stderr,
-                "BOOptimizer[binary]: x* verified, score=%.6g (passes threshold=%.6g)\n",
-                margin_star, threshold);
-        }
-    }
-
-    // --- Build ray directions ---
-    // First 2*n rays: axis-aligned +/- for each parameter
-    // Remaining rays: random unit-vector diagonals (seeded for reproducibility)
-    unsigned actual_n_rays = (n_rays == 0) ? 4 * n : n_rays;
-
-    // Check budget: reduce rays if needed to fit n_iterations
-    unsigned calls_per_ray = n_bracket + n_bisect;
-    if (calls_per_ray == 0) calls_per_ray = 1;
-    if (actual_n_rays * calls_per_ray > n_iterations) {
-        actual_n_rays = n_iterations / calls_per_ray;
-        if (actual_n_rays == 0) actual_n_rays = 1;
-        fprintf(stderr,
-            "BOOptimizer[binary]: budget reduced to %u rays (%u calls each, %u total)\n",
-            actual_n_rays, calls_per_ray, actual_n_rays * calls_per_ray);
-    }
-
-    // Build direction vectors
-    vector<vectord> directions;
-    directions.reserve(actual_n_rays);
-
-    // Axis-aligned +/- directions
-    for (unsigned i = 0; i < n && directions.size() < actual_n_rays; i++) {
-        vectord d((size_t) n, 0.0);
-        d[i] = 1.0;
-        directions.push_back(d);
-    }
-    for (unsigned i = 0; i < n && directions.size() < actual_n_rays; i++) {
-        vectord d((size_t) n, 0.0);
-        d[i] = -1.0;
-        directions.push_back(d);
-    }
-    // Fill remaining slots with random unit-vector diagonals
-    srand(42);  // fixed seed for reproducibility
-    while (directions.size() < actual_n_rays) {
-        vectord d((size_t) n);
-        double len = 0.0;
-        for (size_t i = 0; i < n; i++) {
-            d[i] = (rand() / (double)RAND_MAX) * 2.0 - 1.0;
-            len += d[i] * d[i];
-        }
-        len = sqrt(len);
-        if (len < 1e-12) continue;  // degenerate sample, retry
-        for (size_t i = 0; i < n; i++)
-            d[i] /= len;
-        directions.push_back(d);
-    }
-
-    // --- Seed GP with x* as the one known-good point ---
-    auto params = make_bo_params(n_iterations, 1, 1e-4);
-    EvalCache cache(n, cache_capacity(n_iterations));
-
-    JoSimBO optimizer(params, opt_params, cache, sum_fp,
-                      obj_funct, JoSimBO::ROBUSTNESS);
-    optimizer.x_star = x_star;
-    optimizer.initializeOptimization();
-
-    // --- Ray-bisection boundary search ---
-    const double step0    = 1.0 / (double)(n_bracket + 1); // initial step size along ray
-    unsigned     boundary_pts_found = 0;
-
-    for (unsigned ray = 0; ray < actual_n_rays; ray++) {
-        const vectord &dir = directions[ray];
-
-        // Step outward from x* along this ray to find a bracket [t_pass, t_fail]
-        double t_pass = 0.0;    // last known passing distance along ray
-        double t_fail = -1.0;   // first failing distance (-1 = not found yet)
-
-        for (unsigned step = 1; step <= n_bracket; step++) {
-            double t = step * step0;
-
-            // Build probe point: x* + t * dir, clipped to [0,1]^n
-            vectord x_probe((size_t) n);
-            bool    at_boundary = false;    // true if clipping hit [0,1] wall
-            for (size_t i = 0; i < n; i++) {
-                x_probe[i] = clip01(x_star[i] + t * dir[i]);
-                if (x_probe[i] != x_star[i] + t * dir[i])
-                    at_boundary = true;
-            }
-
-            double score = optimizer.call_oracle(x_probe);
-            fprintf(stderr, "ray %u step %u: t=%.4f score=%.4g\n",
-                    ray, step, t, score);
-
-            if (score <= threshold) {
-                t_fail = t;
-                break;
-            }
-            t_pass = t;
-
-            if (at_boundary) {
-                // Hit the [0,1] wall while still passing -- no boundary in this direction
-                fprintf(stderr, "ray %u: reached parameter boundary still passing\n", ray);
-                break;
-            }
-        }
-
-        if (t_fail < 0.0) {
-            // No failure found along this ray -- boundary is beyond the parameter range
-            fprintf(stderr, "ray %u: no boundary found within parameter range\n", ray);
-            continue;
-        }
-
-        // --- Bisect between t_pass and t_fail to locate the boundary precisely ---
-        for (unsigned k = 0; k < n_bisect; k++) {
-            double t_mid = (t_pass + t_fail) / 2.0;
-            vectord x_probe((size_t) n);
-            for (size_t i = 0; i < n; i++)
-                x_probe[i] = clip01(x_star[i] + t_mid * dir[i]);
-
-            double score = optimizer.call_oracle(x_probe);
-            if (score > threshold)
-                t_pass = t_mid;
-            else
-                t_fail = t_mid;
-        }
-
-        // Boundary point is the last failing probe (just inside the fail region)
-        vectord x_boundary((size_t) n);
-        for (size_t i = 0; i < n; i++)
-            x_boundary[i] = clip01(x_star[i] + t_fail * dir[i]);
-
-        fprintf(stderr, "ray %u: boundary at t=%.6f (%.0f oracle calls)\n",
-                ray, t_fail, (double) optimizer.n_evals);
-        boundary_pts_found++;
-
-        // Feed the boundary point into the GP via stepOptimization so the
-        // surrogate learns the boundary shape for the margin extraction step.
-        // (The oracle call is cached so this costs nothing extra.)
-        optimizer.stepOptimization();
-    }
-
-    fprintf(stderr, "BOOptimizer[binary]: %u boundary points found, %u oracle calls\n",
-            boundary_pts_found, optimizer.n_evals);
-
-    // --- Extract per-parameter margins from GP mean zero-crossing ---
-    report_margins(optimizer, x_star, opt_params, n, threshold,
-                   0.01, n_bisect);
-
-    printf("BOOptimizer[binary]: oracle calls=%u\n", optimizer.n_evals);
-    cache.print_stats(stdout);
-    parameter::save_result(result_fp);
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// SUBMODE_GRADIENT -- surrogate-gradient straddle search from x*
-//
-// Used when the oracle returns a continuous signed margin with a meaningful
-// gradient (e.g. the AC synchronizer gate where slope is the figure of merit).
-// The GP surrogate gradient guides the search toward the boundary.
-//
-// This is the original run_robustness() approach, retained here for circuits
-// where the gradient is informative.
-//
-
-void BOOptimizer::run_gradient(FILE *result_fp,
-                               vector<const_parameter*> &opt_params,
-                               unsigned n)
 {
     // --- Capture x* before any set_mapped_value() calls modify it ---
     vectord x_star((size_t) n);
@@ -630,45 +391,416 @@ void BOOptimizer::run_gradient(FILE *result_fp,
         for (unsigned i = 0; i < n; i++)
             opt_params[i]->set_mapped_value(x_star[i]);
         loop_complex.run_once(sum_fp);
-        double margin_star = obj_funct->get_cur_value();
-        if (margin_star <= threshold) {
+        double score_star = obj_funct->get_cur_value();
+        if (score_star <= threshold) {
             fprintf(stderr,
-                "BOOptimizer[gradient]: WARNING: starting point score=%.6g does not pass threshold=%.6g\n",
-                margin_star, threshold);
+                "BOOptimizer[binary]: WARNING: starting point score=%.6g "
+                "does not pass threshold=%.6g\n", score_star, threshold);
         } else {
             fprintf(stderr,
-                "BOOptimizer[gradient]: x* verified, score=%.6g\n", margin_star);
+                "BOOptimizer[binary]: x* verified, score=%.6g "
+                "(passes threshold=%.6g)\n", score_star, threshold);
         }
     }
 
-    // Use higher noise for gradient mode: boundary probing clusters evaluations
-    // in a small region which stresses the GP kernel matrix at low noise.
+    // --- Number of rays and rounds ---
+    // n_rays==0 means auto: use 4*n rays per round.
+    // Budget is the TOTAL across all rounds -- the cache absorbs repeated
+    // bisection near the same boundary, so later rounds cost much less.
+    const unsigned n_relocate = 3;          // TBD: make this a pragma parameter
+    const unsigned n_rounds   = n_relocate + 1;
+    unsigned actual_n_rays    = (n_rays == 0) ? 4 * n : n_rays;
+
+    // Sanity check: warn if total budget seems tight
+    unsigned calls_per_ray = n_bracket + n_bisect;
+    if (calls_per_ray == 0) calls_per_ray = 1;
+    unsigned est_fresh_calls = actual_n_rays * calls_per_ray;  // round 1 only
+    if (est_fresh_calls > n_iterations) {
+        // Reduce rays so a single round fits in budget
+        actual_n_rays = n_iterations / calls_per_ray;
+        if (actual_n_rays == 0) actual_n_rays = 1;
+        fprintf(stderr,
+            "BOOptimizer[binary]: reduced to %u rays to fit single-round "
+            "budget of %u calls\n", actual_n_rays, n_iterations);
+    }
+
+    fprintf(stderr,
+        "BOOptimizer[binary]: %u rounds, %u rays/round, "
+        "%u calls/ray (budget %u, later rounds mostly cached)\n",
+        n_rounds, actual_n_rays, calls_per_ray, n_iterations);
+
+    if (actual_n_rays < 2 * n)
+        fprintf(stderr,
+            "BOOptimizer[binary]: WARNING: %u rays < 2*n=%u, "
+            "some axis margins will be missing\n", actual_n_rays, 2 * n);
+
+    // --- Direct oracle evaluator shared across all rounds ---
+    unsigned n_evals = 0;
+    EvalCache cache(n, cache_capacity(n_iterations));
+
+    auto eval_point = [&](const vectord &x) -> double {
+        vector<double> p(n);
+        for (size_t i = 0; i < n; i++) p[i] = x[i];
+
+        double cached = cache.lookup(p.data());
+        if (isfinite(cached)) return cached;
+
+        for (size_t i = 0; i < n; i++)
+            opt_params[i]->set_mapped_value(x[i]);
+        loop_complex.run_once(sum_fp);
+        double score = obj_funct->get_cur_value();
+        if (!isfinite(score)) score = -DBL_MAX;  // NaN -> deep fail
+
+        cache.store(p.data(), score);
+        n_evals++;
+        return score;
+    };
+
+    // --- Build ray direction vectors ---
+    // +axis (0..n-1), -axis (n..2n-1), random diagonals beyond.
+    // Same set reused every round -- direction diversity comes from
+    // the changing centre, not from changing directions.
+    vector<vectord> directions;
+    directions.reserve(actual_n_rays);
+
+    for (unsigned i = 0; i < n && directions.size() < actual_n_rays; i++) {
+        vectord d((size_t) n, 0.0); d[i] =  1.0; directions.push_back(d);
+    }
+    for (unsigned i = 0; i < n && directions.size() < actual_n_rays; i++) {
+        vectord d((size_t) n, 0.0); d[i] = -1.0; directions.push_back(d);
+    }
+    srand(42);  // fixed seed: reproducible diagonal directions
+    while (directions.size() < actual_n_rays) {
+        vectord d((size_t) n);
+        double len = 0.0;
+        for (size_t i = 0; i < n; i++) {
+            d[i] = (rand() / (double)RAND_MAX) * 2.0 - 1.0;
+            len += d[i] * d[i];
+        }
+        len = sqrt(len);
+        if (len < 1e-12) continue;
+        for (size_t i = 0; i < n; i++) d[i] /= len;
+        directions.push_back(d);
+    }
+
+    // Step size for bracket search: divides unit interval into n_bracket steps.
+    const double step0 = 1.0 / (double)(n_bracket + 1);
+
+    // Accumulate boundary points across all rounds for centroid computation.
+    vector<vectord> all_boundary_pts;
+
+    // --- Single-round ray-bisection lambda ---
+    // Runs all rays from x_centre, appends found boundary points to
+    // all_boundary_pts, returns number of boundaries found this round.
+    auto run_round = [&](const vectord &x_centre, unsigned round) -> unsigned
+    {
+        fprintf(stderr,
+            "\nBOOptimizer[binary]: round %u/%u, centre=(",
+            round + 1, n_rounds);
+        for (unsigned i = 0; i < n; i++)
+            fprintf(stderr, "%s%.4f", i ? ", " : "", x_centre[i]);
+        fprintf(stderr, ")\n");
+
+        unsigned found_this_round = 0;
+
+        for (unsigned ray = 0; ray < actual_n_rays; ray++) {
+            const vectord &dir = directions[ray];
+            double t_pass = 0.0;
+            double t_fail = -1.0;   // -1 = not yet found
+
+            // --- Bracket search ---
+            for (unsigned step = 1; step <= n_bracket; step++) {
+                double t = step * step0;
+                vectord xp((size_t) n);
+                bool wall = false;
+                for (size_t i = 0; i < n; i++) {
+                    double xi = x_centre[i] + t * dir[i];
+                    xp[i] = clip01(xi);
+                    if (xp[i] != xi) wall = true;
+                }
+                double s = eval_point(xp);
+                fprintf(stderr, "  ray %u step %u: t=%.4f score=%.4g\n",
+                        ray, step, t, s);
+
+                if (s <= threshold) {
+                    t_fail = t;
+                    break;          // bracket found: [t_pass, t_fail]
+                }
+                t_pass = t;         // still passing: advance lower bracket
+
+                if (wall) {
+                    // Hit the [0,1] wall still passing -- no boundary here
+                    fprintf(stderr,
+                        "  ray %u: wall at t=%.4f, still passing\n", ray, t);
+                    break;
+                }
+            }
+
+            if (t_fail < 0.0) {
+                // No failure found along this ray within parameter range
+                fprintf(stderr, "  ray %u: no boundary found\n", ray);
+                continue;
+            }
+
+            // --- Bisection: refine bracket [t_pass, t_fail] ---
+            // Note: t_pass==0 is valid -- it means the first step already
+            // failed, so the bracket is [0, step0].  Bisection still works.
+            for (unsigned k = 0; k < n_bisect; k++) {
+                double tm = (t_pass + t_fail) / 2.0;
+                vectord xp((size_t) n);
+                for (size_t i = 0; i < n; i++)
+                    xp[i] = clip01(x_centre[i] + tm * dir[i]);
+                if (eval_point(xp) > threshold)
+                    t_pass = tm;
+                else
+                    t_fail = tm;
+            }
+
+            // Record the last-passing boundary point
+            vectord bpt((size_t) n);
+            for (size_t i = 0; i < n; i++)
+                bpt[i] = clip01(x_centre[i] + t_pass * dir[i]);
+            all_boundary_pts.push_back(bpt);
+            found_this_round++;
+
+            fprintf(stderr,
+                "  ray %u: t_pass=%.6f t_fail=%.6f (%u oracle calls total)\n",
+                ray, t_pass, t_fail, n_evals);
+        }
+
+        return found_this_round;
+    };
+
+    // --- Iterative rounds with centre relocation ---
+    vectord x_centre = x_star;
+
+    for (unsigned round = 0; round < n_rounds; round++) {
+        run_round(x_centre, round);
+
+        // After all rounds except the last: relocate to centroid
+        if (round + 1 >= n_rounds || all_boundary_pts.empty())
+            continue;
+
+        // Compute centroid of all boundary points found so far
+        vectord centroid((size_t) n, 0.0);
+        for (const vectord &bp : all_boundary_pts)
+            for (size_t i = 0; i < n; i++)
+                centroid[i] += bp[i];
+        for (size_t i = 0; i < n; i++)
+            centroid[i] /= (double) all_boundary_pts.size();
+
+        // Verify centroid passes; if not, bisect back toward current centre
+        double score_c = eval_point(centroid);
+        if (score_c > threshold) {
+            fprintf(stderr,
+                "BOOptimizer[binary]: centroid passes (score=%.4g), "
+                "relocating centre\n", score_c);
+            x_centre = centroid;
+        } else {
+            // Centroid fails -- bisect between x_centre (pass) and centroid (fail)
+            fprintf(stderr,
+                "BOOptimizer[binary]: centroid fails (score=%.4g), "
+                "bisecting back toward current centre\n", score_c);
+            vectord x_lo = x_centre, x_hi = centroid;
+            for (unsigned k = 0; k < 16; k++) {
+                vectord xm((size_t) n);
+                for (size_t i = 0; i < n; i++)
+                    xm[i] = (x_lo[i] + x_hi[i]) / 2.0;
+                if (eval_point(xm) > threshold)
+                    x_lo = xm;
+                else
+                    x_hi = xm;
+            }
+            x_centre = x_lo;
+            fprintf(stderr,
+                "BOOptimizer[binary]: relocated to (");
+            for (unsigned i = 0; i < n; i++)
+                fprintf(stderr, "%s%.4f", i ? ", " : "", x_centre[i]);
+            fprintf(stderr, ")\n");
+        }
+    }
+
+    // Helper: convert normalised [0,1] value to physical units via the
+    // parameter's own mapping.  set_mapped_value() sets the parameter;
+    // get_cur_value() reads back the physical value.
+    // Note: this temporarily modifies the parameter value -- it is restored
+    // by the caller before any subsequent oracle calls.
+    auto to_physical = [&](unsigned idx, double norm) -> double {
+        opt_params[idx]->set_mapped_value(norm);
+        return opt_params[idx]->get_cur_value();
+    };
+
+    // --- Final margin report: axis-aligned rays from final centre ---
+    // These rays are cheap: most bisection points will be cache hits.
+    printf("\nBOOptimizer[binary]: margin analysis from final centre\n");
+    printf("  Centre: (");
+    for (unsigned i = 0; i < n; i++)
+        printf("%s%s=%.6g", i ? ", " : "",
+               opt_params[i]->get_name(), to_physical(i, x_centre[i]));
+    printf(")\n\n");
+
+    printf("%-20s  %12s  %12s  %12s  %12s  %12s  %8s\n",
+           "parameter", "centre",
+           "lo_pass", "lo_fail", "hi_pass", "hi_fail", "margin_%");
+
+    for (unsigned i = 0; i < n; i++) {
+        double t_pass_hi = 0.0, t_fail_hi = 0.0;
+        double t_pass_lo = 0.0, t_fail_lo = 0.0;
+        bool   hi_found = false, lo_found = false;
+
+        // +axis (hi margin)
+        {
+            double tp = 0.0, tf = -1.0;
+            for (unsigned step = 1; step <= n_bracket; step++) {
+                double t = step * step0;
+                vectord xp((size_t) n);
+                bool wall = false;
+                for (size_t j = 0; j < n; j++) {
+                    double xj = x_centre[j] + t * (j == i ? 1.0 : 0.0);
+                    xp[j] = clip01(xj);
+                    if (xp[j] != xj) wall = true;
+                }
+                double s = eval_point(xp);
+                if (s <= threshold) { tf = t; break; }
+                tp = t;
+                if (wall) break;
+            }
+            if (tf >= 0.0) {
+                for (unsigned k = 0; k < n_bisect; k++) {
+                    double tm = (tp + tf) / 2.0;
+                    vectord xp((size_t) n);
+                    for (size_t j = 0; j < n; j++)
+                        xp[j] = clip01(x_centre[j] + tm*(j==i?1.0:0.0));
+                    if (eval_point(xp) > threshold) tp = tm; else tf = tm;
+                }
+                t_pass_hi = tp; t_fail_hi = tf; hi_found = true;
+            } else {
+                t_pass_hi = tp; t_fail_hi = tp;  // reached wall still passing
+            }
+        }
+
+        // -axis (lo margin)
+        {
+            double tp = 0.0, tf = -1.0;
+            for (unsigned step = 1; step <= n_bracket; step++) {
+                double t = step * step0;
+                vectord xp((size_t) n);
+                bool wall = false;
+                for (size_t j = 0; j < n; j++) {
+                    double xj = x_centre[j] + t * (j == i ? -1.0 : 0.0);
+                    xp[j] = clip01(xj);
+                    if (xp[j] != xj) wall = true;
+                }
+                double s = eval_point(xp);
+                if (s <= threshold) { tf = t; break; }
+                tp = t;
+                if (wall) break;
+            }
+            if (tf >= 0.0) {
+                for (unsigned k = 0; k < n_bisect; k++) {
+                    double tm = (tp + tf) / 2.0;
+                    vectord xp((size_t) n);
+                    for (size_t j = 0; j < n; j++)
+                        xp[j] = clip01(x_centre[j] + tm*(j==i?-1.0:0.0));
+                    if (eval_point(xp) > threshold) tp = tm; else tf = tm;
+                }
+                t_pass_lo = tp; t_fail_lo = tf; lo_found = true;
+            } else {
+                t_pass_lo = tp; t_fail_lo = tp;
+            }
+        }
+
+        double margin_pct = 100.0 * (t_pass_lo + t_pass_hi) / 2.0;
+
+        // Physical values: set normalised coord, read back physical value.
+        // Centre, lo boundary (centre - lo_pass along axis), hi boundary.
+        double phys_centre   = to_physical(i, x_centre[i]);
+        double phys_lo_pass  = to_physical(i, clip01(x_centre[i] - t_pass_lo));
+        double phys_lo_fail  = to_physical(i, clip01(x_centre[i] - t_fail_lo));
+        double phys_hi_pass  = to_physical(i, clip01(x_centre[i] + t_pass_hi));
+        double phys_hi_fail  = to_physical(i, clip01(x_centre[i] + t_fail_hi));
+
+        printf("%-20s  %12.6g  %12.6g  %12.6g  %12.6g  %12.6g  %7.2f%%%s%s\n",
+               opt_params[i]->get_name(),
+               phys_centre,
+               phys_lo_pass, phys_lo_fail,
+               phys_hi_pass, phys_hi_fail,
+               margin_pct,
+               lo_found ? "" : " (lo:wall)",
+               hi_found ? "" : " (hi:wall)");
+    }
+
+    // All accumulated boundary points across all rounds (physical units)
+    printf("\nAll boundary points (%zu across %u rounds):\n",
+           all_boundary_pts.size(), n_rounds);
+    for (size_t b = 0; b < all_boundary_pts.size(); b++) {
+        printf("  pt %3zu:", b);
+        for (size_t i = 0; i < n; i++)
+            printf("  %s=%.6g", opt_params[i]->get_name(),
+                   to_physical(i, all_boundary_pts[b][i]));
+        printf("\n");
+    }
+
+    printf("\nBOOptimizer[binary]: oracle calls=%u\n", n_evals);
+    cache.print_stats(stdout);
+    parameter::save_result(result_fp);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// SUBMODE_GRADIENT -- surrogate-gradient straddle search from x*
+//
+// Used when the oracle returns a continuous signed margin with a meaningful
+// gradient (e.g. AC synchronizer gate).  GP-based margin extraction at end.
+//
+
+void BOOptimizer::run_gradient(FILE *result_fp,
+                               vector<const_parameter*> &opt_params,
+                               unsigned n)
+{
+    vectord x_star((size_t) n);
+    for (unsigned i = 0; i < n; i++)
+        x_star[i] = opt_params[i]->get_mapped_value();
+
+    {
+        for (unsigned i = 0; i < n; i++)
+            opt_params[i]->set_mapped_value(x_star[i]);
+        loop_complex.run_once(sum_fp);
+        double margin_star = obj_funct->get_cur_value();
+        if (margin_star <= threshold)
+            fprintf(stderr,
+                "BOOptimizer[gradient]: WARNING: starting point score=%.6g "
+                "does not pass threshold=%.6g\n", margin_star, threshold);
+        else
+            fprintf(stderr,
+                "BOOptimizer[gradient]: x* verified, score=%.6g\n",
+                margin_star);
+    }
+
+    // Higher noise: boundary probing clusters evaluations, stressing the
+    // GP kernel matrix at low noise.
     auto params = make_bo_params(n_iterations, 1, 1e-4);
     EvalCache cache(n, cache_capacity(n_iterations));
 
     JoSimBO optimizer(params, opt_params, cache, sum_fp,
                       obj_funct, JoSimBO::ROBUSTNESS);
     optimizer.x_star = x_star;
-
-    // Seed the GP with x* then run straddle-guided steps
     optimizer.initializeOptimization();
 
     vectord x_cur = x_star;
-    const double beta        = 1.96;  // straddle exploration weight
-    const double max_step    = 0.05;  // max step in normalised space (tighter than before)
-    const double noise_scale = 0.02;  // exploration noise amplitude
+    const double beta        = 1.96;
+    const double max_step    = 0.05;
+    const double noise_scale = 0.02;
 
     for (unsigned iter = 0; iter < n_iterations; iter++) {
         double grad_mag;
         vectord direction = optimizer.boundary_gradient(x_cur, grad_mag);
 
-        // Step size: proportional to |mu| / |grad|, capped at max_step
         double mu_cur = fabs(optimizer.surrogate_mean(x_cur) - threshold);
         double step   = (grad_mag > 1e-12)
                         ? min(mu_cur / grad_mag, max_step)
                         : max_step;
 
-        // Gradient step + small exploration noise
         vectord x_next((size_t) n);
         for (size_t i = 0; i < n; i++) {
             double sigma_i = optimizer.surrogate_std(x_cur);
@@ -677,7 +809,6 @@ void BOOptimizer::run_gradient(FILE *result_fp,
             x_next[i] = clip01(x_cur[i] + step * direction[i] + noise);
         }
 
-        // Accept x_next if its straddle value is higher than x_cur
         if (optimizer.straddle(x_next, beta) > optimizer.straddle(x_cur, beta))
             x_cur = x_next;
 
@@ -687,8 +818,8 @@ void BOOptimizer::run_gradient(FILE *result_fp,
                 iter, step, grad_mag, optimizer.surrogate_mean(x_cur));
     }
 
-    report_margins(optimizer, x_star, opt_params, n, threshold,
-                   0.01, n_bisect);
+    report_margins_gp(optimizer, x_star, opt_params, n, threshold,
+                      0.01, n_bisect);
 
     printf("BOOptimizer[gradient]: oracle calls=%u\n", optimizer.n_evals);
     cache.print_stats(stdout);
@@ -712,7 +843,8 @@ void BOOptimizer::run_robustness(FILE *result_fp,
             run_gradient(result_fp, opt_params, n);
             break;
         case SUBMODE_PROBABILISTIC:
-            fprintf(stderr, "BOOptimizer: probabilistic submode not yet implemented\n");
+            fprintf(stderr,
+                "BOOptimizer: probabilistic submode not yet implemented\n");
             break;
     }
 }

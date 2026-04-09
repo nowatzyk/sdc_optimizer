@@ -128,7 +128,7 @@ unsigned EvalCache::compute_hash(const double *p) const
 double EvalCache::lookup(const double *p) const
 {
     unsigned h = compute_hash(p);
-
+    
     for (int probe = 0; probe < MAX_PROBE; probe++) {
         unsigned idx = (h + ((probe + 1) * probe)/2) & (cap - 1);
         const Entry  *e = get_entry(idx);

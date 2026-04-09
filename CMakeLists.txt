@@ -35,6 +35,7 @@ add_executable(csv_analyzer
     geomean_expression.cpp avg_expression.cpp
     loop_complex.cpp lsq_fit_function.cpp
     nodes_of_interest.cpp spice_deck.cpp parser_interface.cpp
+    nl_lsq_fit.cpp binary_ellipsoid_fit.cpp bef_functions.cpp
     ${BISON_pragma_parser_OUTPUTS}
     ${FLEX_pragma_lexer_OUTPUTS}
 )
