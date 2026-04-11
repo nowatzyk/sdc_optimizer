@@ -73,7 +73,7 @@ class bin_ellipsoid_fit {
     
     nl_lsq_fit          *e_fit;                 // the NL lsq fit machinery
     unsigned            n_e_params;             // #of parameters for the ellipsoid (a function of n_dim)
-    double              *e_params;              // Parameters aof the fitted ellipsoid
+    double              *e_params;              // Parameters of the fitted ellipsoid
     
     EvalCache           *ev_cache;              // Perhaps saves some JoSIM calls (doubtful)
     
@@ -90,13 +90,20 @@ class bin_ellipsoid_fit {
     void                ray_search_mode0(double ds, double de, double *pnt, double *dir, unsigned n_probes);
     void                ray_search_mode1(double ds, double de, double *pnt, double *dir, unsigned n_probes);
                                                 // recursive probe functions
-    void                estimate_initial_e_params();
+    void                estimate_initial_e_params(); // Make up an estimate for the fit to start from
+    int                 solve();                // perform one iteration of the LSQ fit 
+    void                reject_outliers();      // Filter out outliers
     
+    unsigned            n_iterations;           // #of LM-fitting steps to be performed
     unsigned            n_rays;                 // #of extra rays to cast
     unsigned            n_candidates;           // #of candidates to consider per non-axis ray
     unsigned            n_probes_p_ray;         // #of probes per ray (search budget)
     double              *ray_dirs;              // Storage area for the ray directions
     
+    double              outlier_frac;           // The fraction of data points to be considered outliers
+                                                // This needs to be in [0,1]. Say 0.01 for 1%
+    void                print_results();        // Output the print_results
+
 public:
     bin_ellipsoid_fit (FILE *result_fp,
                        vector<const_parameter*> &opt_params,

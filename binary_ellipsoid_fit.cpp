@@ -6,6 +6,9 @@
 
 #include "binary_ellipsoid_fit.h"
 
+const unsigned n_lm_iteration = 100;            // #of of iteration for the LM solver
+#define _BIN_EFIT_DEBUG_                        // When defined, produce extra debugging info on stdout
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //  The points being expored are kept in an array to be replayed to the non-linear least square fit 
@@ -66,6 +69,7 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     n_rays = 2 * n_dim;
     n_candidates = 10;
     n_probes_p_ray = 15;
+    n_iterations = 3;
 
     ray_dirs = new double[n_rays * n_dim];
     
@@ -82,11 +86,45 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     
     e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
                            bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
-    int ec = e_fit->init(e_params);
-    if (ec != 0) {
-        fprintf(stderr, "The initial ellipse parameter estimation was not viable: bad P_ok()\n");
-        exit(1);
+    
+    //
+    // Now the actual work is done here. It is modular, so it could beacome a separate module...
+    //
+    for (unsigned i = 0; i < n_iterations; i++) {
+        if (i > 0) {
+            explore(x_start);
+            reject_outliers();
+        }
+        solve();
     }
+    print_results();
+#ifdef _BIN_EFIT_DEBUG_
+    {
+        FILE *of = fopen("bef_points.dat", "w");    // Dump all points
+        assert(of != nullptr);
+        fprintf(of, "#");                           // Mark header line as gnuplot comment
+        for (unsigned i = 0; i < n_dim; i++)
+            fprintf (of, " (%u):%s", i + 1, opt_params[i]->get_name());
+        fprintf(of, " (%u):value (%u):fit_val (%u):outlier (%u):synt_pnt (%u):squashed\n",
+                      n_dim+1,   n_dim+2,     n_dim+3,     n_dim+4,      n_dim+5);
+        for(unsigned i = 0; i < exp_pnts->size(); i++) {
+            for (unsigned j = 0; j < n_dim; j++) {
+                double t = opt_params[i]->get_mapped_value();   // Hack to un-map the point coordinates
+                opt_params[i]->set_mapped_value(exp_pnts->value(i)[j]);
+                fprintf(of, "%.5lg ", opt_params[i]->get_cur_value());
+                opt_params[i]->set_mapped_value(t);
+                // Note: instead of getting t, and restoring it, at this point we know that
+                //       the value can be restored from x_start. But this way, this code snipped
+                //       could be used elsewhere. However, doing log/exp translation repeatably on
+                //       one number may cause a subtle value drift: may loose a few digits in the process
+            }
+            fprintf(of, "%u %.5lg %u %u %u\n", (exp_pnts->meta(i) & bef_pnt_value) != 0ull,
+                    e_fit->eval(exp_pnts->value(i)), (exp_pnts->meta(i) & bef_pnt_outlier) != 0ull,
+                    (exp_pnts->meta(i) & bef_pnt_synth) != 0ull, (exp_pnts->meta(i) & bef_pnt_squashed) != 0ull);
+        }
+        fclose(of);
+    }
+#endif
 }
 
 unsigned bin_ellipsoid_fit::eval_pnt(double *pnt)
@@ -435,3 +473,150 @@ void bin_ellipsoid_fit::estimate_initial_e_params()
             e_params[2 + 2*n_dim + i] = 1.0;    // scaling factor for the higher dimensions is set to 1
     }
 }
+
+int bin_ellipsoid_fit::solve()
+    //
+    // This performs one LSQ fit of the n-dimensional ellipsoid using the data collected so far.
+    // It is required that the nl_lsq_fit subsystem had been set up and was provided with a suitabe
+    // initial guess for the ellipsoid parameters. The Levenberg-Marquardt algorithm used is not very
+    // robust and can fail. Initial experimenst so far have not encountered any failures, but those test
+    // were not particulrily exhausting.
+    //
+    // returns 0 on success, 1 on failure
+    //
+{
+    int ec = e_fit->init(e_params);
+    if (ec != 0) {
+        //
+        // Note: this means that the parameter check function failed the current e_params set.
+        //       This set is either the result of a previous solve, which means the P_ok() should have
+        //       checked them, whitch would expose a program bug, OR that the initial geuss for the 
+        //       did not meet the P_ok() requirements, which is also a bug.
+        //
+        fprintf(stderr, "The initial ellipse parameter estimation was not viable: bad P_ok()\n");
+        exit(1);
+    }
+    
+    for (unsigned i = 0; i < n_lm_iteration; i++) { // One LM iteration
+        
+        for (unsigned j = 0; j < exp_pnts->size(); j++) {
+            if ((exp_pnts->meta(j) & bef_pnt_outlier) != 0ull)
+                continue;                       // skip outliers
+
+            double f = 0.0;
+            if ((exp_pnts->meta(j) & bef_pnt_value) != 0ull)
+                f = 1.0;
+            ec = e_fit->add_datum(exp_pnts->value(j), f);
+            assert(ec == 0);                    // adding data failing is a sign of a bug
+        }
+        
+        double cur_res, new_res;                // Current and new residuals
+        ec = e_fit->solve_1s(cur_res, new_res);
+#ifdef _BIN_EFIT_DEBUG_
+        printf(" %2u : cr= %.6lg  nr=%.6lg ec=%d - ", i,  cur_res, new_res, ec);
+#endif
+        if (ec == 1)
+            break;
+        if (ec < 0) {
+            fprintf(stderr, "LM iteration %d failed: ec=%d\n", i, ec);
+            return 1;
+        }
+    }
+    
+    e_fit->get_params(e_params);                // retrieve the new ellipsoid parameters
+    for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
+        x_start[i] = (e_params[2 + i] + e_params[2 + n_dim + i]) * 0.5;
+    
+    return 0;
+}
+
+struct outlier_rec {
+    unsigned        ep_index;                   // Index to point in <exp_pnts>
+    double          discrepancy;                // absolute difference between actual value and fitted value
+};
+
+int oulier_key(const void *a, const void *b)
+{
+    if (((outlier_rec *) a)->discrepancy < ((outlier_rec *) b)->discrepancy) return -1;
+    if (((outlier_rec *) a)->discrepancy > ((outlier_rec *) b)->discrepancy) return  1;
+    return 0;
+}
+
+void bin_ellipsoid_fit::reject_outliers()
+    //
+    // The pass region in the Shmoo plot can be non-convex and may have wierd shapes that not fit well
+    // with the idea of approximating the pass region with an n-dimensional ellipsoid. The fit can be improved
+    // by rejecting points that do not fit well. However this is a dicy preposition: it can easily succomb to
+    // confirmation bias. Hence the fraction of data points to be rejected as outliners should be small.
+    //
+    // The outlier rejection ranks data point by the absolute difference between the fitted value and the 
+    // actual value. It considers all data points, including those that previouslu were rejected as outliers.
+    // The <otlier_fac> fraction of points will then be marked as outlier 
+    //
+    // Pre-requisite: there must have been a successfull lsq-fit
+    //
+{
+    assert((0.0 <= outlier_frac) && (outlier_frac <= 1.0));
+    unsigned n_out = (unsigned) floor((double)(exp_pnts->size()) * outlier_frac);
+    if (n_out < 1)
+        return;                                 // Nothing to do: no outliers
+                                                // Note: the number of data points is increasing in each
+                                                // iteration, so n_out will be monotonically increasing.
+                                                // Thus if n_out is 0, then ther cannot be any outliers so far,
+                                                // hence it is unnecessary to clear the outlier flags.
+    assert(n_out < exp_pnts->size());
+
+    outlier_rec *o_rec = new outlier_rec[exp_pnts->size()];
+    
+    for (unsigned i = 0; i < exp_pnts->size(); i++) {
+        double f_act = (exp_pnts->meta(i) & bef_pnt_value) ? 1.0 : 0.0;  // actual value
+        exp_pnts->meta(i) &= ~bef_pnt_outlier;  // clear previous outlier designation
+        double f_fit = e_fit->eval(exp_pnts->value(i)); // fitted value
+        
+        o_rec[i].discrepancy = fabs(f_act - f_fit);
+        o_rec[i].ep_index = i;
+    }
+    
+    qsort(o_rec, exp_pnts->size(), sizeof(outlier_rec), oulier_key);
+    
+    for (unsigned i = 0; i < n_out; i++)        // Mark the new set of outliers
+        exp_pnts->meta(o_rec[i].ep_index) |= bef_pnt_outlier;
+    
+    delete[] o_rec;
+}
+
+void bin_ellipsoid_fit::print_results()
+{
+    double dir[n_dim];
+
+    for (unsigned i = 0; i < n_dim; i++) {
+        
+        for (unsigned j = 0; j < n_dim; j++)
+            dir[j] = (i == j) ? 1.0 : 0.0;      // set up direction vector: point along the positive i-th axis
+        
+        double plus, minus;
+        int ec = ellipsoid_intersect(e_params, n_dim, x_start, dir, plus, &minus);
+        assert(ec == 0);                        // e_intersect is broken if it cannot do this!
+        
+        if (i > 1) {                            // for dimensions 2, 3, ... undo scaling
+            plus  /= e_params[2 + 2*n_dim + (i - 2)];
+            minus /= e_params[2 + 2*n_dim + (i - 2)];
+        }
+        
+        //
+        // Use the parameter mapping function to translate from fit space [0,1] to the actual parameter values
+        //
+        opt_params[i]->set_mapped_value(x_start[i] + minus);
+        double min_value = opt_params[i]->get_cur_value();
+        opt_params[i]->set_mapped_value(x_start[i] + plus);
+        double max_value = opt_params[i]->get_cur_value();
+        opt_params[i]->set_mapped_value(x_start[i]);
+        // this one is last to leave the parameter with the correct value
+        double cntr_value = opt_params[i]->get_cur_value();
+        
+        fprintf(result_fp, "%20s : %10.2lg [%10.2lg,%10.2lg] -%6.2lf%% +%6.2lf%%\n",
+                opt_params[i]->get_name(), cntr_value, min_value, max_value,
+                -(min_value/cntr_value - 1.0) * 100.0, (max_value/cntr_value - 1.0) * 100.0);
+    }
+}
+
