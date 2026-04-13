@@ -124,17 +124,36 @@ const_parameter::const_parameter(char* nm, double val, double v_min, double v_ma
     loop_complex.register_parameter(this);
 }
 
-double const_parameter::get_mapped_value()
+double const_parameter::map_parm_to_01(double p_value)
 {
     double m_val = NAN;             // Default to when the value is out of bound
     
-    if ((min_value <= value) && (value <= max_value)) {
+    if ((min_value <= p_value) && (p_value <= max_value)) {
         if (log_map)
             // Logarithmic mapping:
-            m_val = (log(value) - log(min_value)) / (log(max_value) - log(min_value));
+            m_val = (log(p_value) - log(min_value)) / (log(max_value) - log(min_value));
         else
             // Linear mapping:
-            m_val = (value - min_value) / (max_value - min_value);
+            m_val = (p_value - min_value) / (max_value - min_value);
+    }
+    
+    return m_val;
+}
+
+double const_parameter::get_mapped_value()
+{
+    return map_parm_to_01(value);
+}
+
+double const_parameter::map_01_to_parm(double s01_value)
+{
+    double m_val = NAN;
+    
+    if ((0.0 <= s01_value) && (s01_value <= 1.0)) {
+        if (log_map)
+            m_val = exp(s01_value * log(max_value) + (1.0 - s01_value) * log(min_value));
+        else
+            m_val = min_value + s01_value * (max_value - min_value);
     }
     
     return m_val;
@@ -142,11 +161,8 @@ double const_parameter::get_mapped_value()
 
 void const_parameter::set_mapped_value(double m_val)
 {
-    assert((0.0 <= m_val) && (m_val <= 1.0));
-    if (log_map)
-        value = exp(m_val * log(max_value) + (1.0 - m_val) * log(min_value));
-    else
-        value = min_value + m_val * (max_value - min_value);
+    value = map_01_to_parm(m_val);
+    assert(isfinite(value));
 }
 
 void const_parameter::print_self(FILE* fp)

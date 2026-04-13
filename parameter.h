@@ -87,6 +87,9 @@ public:
     double get_mapped_value();              // Returns the value in [0,1] provided that a range is defined
     void   set_mapped_value(double m_val);  // Does the reverse
     
+    double map_01_to_parm(double val);      // Map a value in [0,1] space to the perameter value
+    double map_parm_to_01(double val);      // Do the reverse of above
+    
     void   print_self(FILE *fp);            // Prints a version of itself
 
     double get_cur_value() override {return value;}; // just returns the value

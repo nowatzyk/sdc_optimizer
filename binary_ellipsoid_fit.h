@@ -105,10 +105,17 @@ class bin_ellipsoid_fit {
     void                print_results();        // Output the print_results
 
 public:
-    bin_ellipsoid_fit (FILE *result_fp,
-                       vector<const_parameter*> &opt_params,
-                       parameter *of_ptr,
-                       FILE *sum_fp);
+    bin_ellipsoid_fit (FILE *result_fp,         // where to place the results
+                       vector<const_parameter*> &opt_params,  // the parameters that need to optimized
+                       parameter *of_ptr,       // pointer to the objective function
+                       FILE *sum_fp,            // Passed on to the loop complex to log the smulation outputs
+                       unsigned n_iter = 3,     // #of relocations of the ellipsoid / lsq fitting steps
+                       unsigned n_ray_mul = 2,  // multiply the #of parameter by this number to get the 
+                                                // number of extra (beyond 2 per axis) rays to cast
+                       unsigned n_can = 16,     // #of randomly choosen candidates from which to choose
+                                                // the best direction for an extra ray to cast
+                       unsigned n_p_p_ray = 15  // #of points to probe for each ray
+                       );
 
 };
 

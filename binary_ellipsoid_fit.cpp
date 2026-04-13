@@ -51,7 +51,8 @@ unsigned explored_points::add_pnt(double *pnt)
 
 
 bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>& op, parameter *of_p,
-                                     FILE *s_fp) :
+                                     FILE *s_fp, unsigned n_itr, unsigned n_ray_mul, unsigned n_can,
+                                     unsigned n_p_p_ray) :
     result_fp(result_fp), opt_params(op), of_ptr(of_p), sum_fp(s_fp)
 {
     n_dim = opt_params.size();
@@ -59,17 +60,16 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     // save start point:
     x_start = new double[n_dim];
     for (unsigned i = 0; i < n_dim; i++)
-        x_start[i] = opt_params[i]->get_cur_value();
+        x_start[i] = opt_params[i]->get_mapped_value();
     
     // Allocate data structures:
     ev_cache = new EvalCache(n_dim);
     exp_pnts = new explored_points(n_dim);
 
-    // TBD: this needs to be controlled better, make it a a attribute, etc...
-    n_rays = 2 * n_dim;
-    n_candidates = 10;
-    n_probes_p_ray = 15;
-    n_iterations = 3;
+    n_rays = n_ray_mul * n_dim;
+    n_candidates = n_can;
+    n_probes_p_ray = n_p_p_ray;
+    n_iterations = n_itr;
 
     ray_dirs = new double[n_rays * n_dim];
     
@@ -108,16 +108,9 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
         fprintf(of, " (%u):value (%u):fit_val (%u):outlier (%u):synt_pnt (%u):squashed\n",
                       n_dim+1,   n_dim+2,     n_dim+3,     n_dim+4,      n_dim+5);
         for(unsigned i = 0; i < exp_pnts->size(); i++) {
-            for (unsigned j = 0; j < n_dim; j++) {
-                double t = opt_params[i]->get_mapped_value();   // Hack to un-map the point coordinates
-                opt_params[i]->set_mapped_value(exp_pnts->value(i)[j]);
-                fprintf(of, "%.5lg ", opt_params[i]->get_cur_value());
-                opt_params[i]->set_mapped_value(t);
-                // Note: instead of getting t, and restoring it, at this point we know that
-                //       the value can be restored from x_start. But this way, this code snipped
-                //       could be used elsewhere. However, doing log/exp translation repeatably on
-                //       one number may cause a subtle value drift: may loose a few digits in the process
-            }
+            for (unsigned j = 0; j < n_dim; j++)
+                fprintf(of, "%.5lg ", opt_params[j]->map_01_to_parm(exp_pnts->value(i)[j]));
+
             fprintf(of, "%u %.5lg %u %u %u\n", (exp_pnts->meta(i) & bef_pnt_value) != 0ull,
                     e_fit->eval(exp_pnts->value(i)), (exp_pnts->meta(i) & bef_pnt_outlier) != 0ull,
                     (exp_pnts->meta(i) & bef_pnt_synth) != 0ull, (exp_pnts->meta(i) & bef_pnt_squashed) != 0ull);
@@ -130,7 +123,7 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
 unsigned bin_ellipsoid_fit::eval_pnt(double *pnt)
 {
     double score = ev_cache->lookup(pnt);
-    if (score != NAN)
+    if (isfinite(score))
         return score > 0.0;                     // Cache hit: we are done!
         
     for (unsigned i = 0; i < n_dim; i++)
@@ -212,7 +205,9 @@ void bin_ellipsoid_fit::explore(double* pnt)
         }
         
         assert(best_score < 1.0);       // There has to be a new direction
-        ray_search(pnt, best_dir);      // explore it
+        for(unsigned j = 0; j < n_dim; j++)
+            dir[j] = best_dir[j];       // Need a copy because ray_search() will scale the direction
+        ray_search(pnt, dir);           // explore it
         
         for(unsigned k = 0; k < n_dim; k++)
             ray_dirs[(i * n_dim) + k] = best_dir[k];    // save ray direction (wasted on the last iteration)
@@ -240,7 +235,9 @@ void bin_ellipsoid_fit::ray_search(double *pnt, double *dir)
     
     double probe_pnt[n_dim];                // Probe the end-point
     for (unsigned i = 0; i < n_dim; i++)
-        probe_pnt[i] = pnt[i] + dir[i];
+        probe_pnt[i] = fmin(1.0, fmax(0.0, pnt[i] + dir[i]));
+        // Note: the clipping is needed because rounding errors can conspire to move the point
+        //       slightly outside the parameter range of [0,1] that will cause trouble downstream
 
     if (eval_pnt(probe_pnt) > 0)            // The end point is a pass (un-expected!)
         ray_search_mode1(0.0, 1.0, pnt, dir, n_probes_p_ray);
@@ -262,7 +259,7 @@ void bin_ellipsoid_fit::ray_search(double *pnt, double *dir)
             continue;                       // skip the passing points
 
         double s = 0.0;                     // accumulate the distance from the origin squared
-        for (unsigned j = 0; i < n_dim; i++) {
+        for (unsigned j = 0; j < n_dim; j++) {
             double t = pnt[j] - (exp_pnts->value(i))[j];
             s += t * t;
         }
@@ -278,7 +275,7 @@ void bin_ellipsoid_fit::ray_search(double *pnt, double *dir)
                 continue;                   // skip the failed points, no need to squash those
                 
             double s = 0.0;                 // accumulate the distance from the origin squared
-            for (unsigned j = 0; i < n_dim; i++) {
+            for (unsigned j = 0; j < n_dim; j++) {
                 double t = pnt[j] - (exp_pnts->value(i))[j];
                 s += t * t;
             }
@@ -322,14 +319,18 @@ void bin_ellipsoid_fit::ray_search_mode0(double ds, double de, double *pnt, doub
         ray_search_mode0(d, de, pnt, dir, n2);
         n_probes -= n2;
         if (n_probes > 0)
-            ray_search_mode1(d, de, pnt, dir, n_probes);
+            ray_search_mode1(ds, d, pnt, dir, n_probes);
     } else {
         //
         // The half-way point is a fail
         //
         if (n_probes <= 0)
             return;                             // Probe budget is up, we are done.
-        ray_search_mode0(ds, d, pnt, dir, n_probes);
+            
+        ray_search_mode0(ds, d, pnt, dir, (n_probes + 1) / 2); // Spend 1/2 of probe budget going forward
+        n_probes /= 2;                          // spend the rest of it filling up with synthetic fail points
+        if (n_probes <= 0)
+            return;                             // Probe budget is up, we are done.
 
         //
         // Now we add n_probes synthetic fail points along the outboud portion of the ray.
@@ -562,22 +563,37 @@ void bin_ellipsoid_fit::reject_outliers()
         return;                                 // Nothing to do: no outliers
                                                 // Note: the number of data points is increasing in each
                                                 // iteration, so n_out will be monotonically increasing.
-                                                // Thus if n_out is 0, then ther cannot be any outliers so far,
+                                                // Thus if n_out is 0, then there cannot be any outliers so far,
                                                 // hence it is unnecessary to clear the outlier flags.
     assert(n_out < exp_pnts->size());
 
     outlier_rec *o_rec = new outlier_rec[exp_pnts->size()];
     
+    unsigned noc = 0;
     for (unsigned i = 0; i < exp_pnts->size(); i++) {
-        double f_act = (exp_pnts->meta(i) & bef_pnt_value) ? 1.0 : 0.0;  // actual value
         exp_pnts->meta(i) &= ~bef_pnt_outlier;  // clear previous outlier designation
+        
+        if ((exp_pnts->meta(i) & (bef_pnt_synth | bef_pnt_squashed)) != 0ull)
+            continue;                           // synthetic or squashed points are never outliers
+
+        //
+        // Note: it may be a good idea to consider only points with a passing value for being an outlier
+        //       on the grounds that that is the conservative thing to do and because the most likely
+        //       source for ouliers are passing regions that are eithernot convex or are disconnected
+        //       neither are good design points.
+        //
+        double f_act = (exp_pnts->meta(i) & bef_pnt_value) ? 1.0 : 0.0;  // actual value
         double f_fit = e_fit->eval(exp_pnts->value(i)); // fitted value
         
-        o_rec[i].discrepancy = fabs(f_act - f_fit);
-        o_rec[i].ep_index = i;
+        o_rec[noc].discrepancy = fabs(f_act - f_fit);
+        o_rec[noc].ep_index = i;
+        noc++;                                  // one more outlier candidate
     }
     
-    qsort(o_rec, exp_pnts->size(), sizeof(outlier_rec), oulier_key);
+    assert(noc > n_out);                        // It doesn't make sense to have more outliers to remove
+                                                // than there are outlier candidates!
+    
+    qsort(o_rec, noc, sizeof(outlier_rec), oulier_key);
     
     for (unsigned i = 0; i < n_out; i++)        // Mark the new set of outliers
         exp_pnts->meta(o_rec[i].ep_index) |= bef_pnt_outlier;
@@ -606,13 +622,9 @@ void bin_ellipsoid_fit::print_results()
         //
         // Use the parameter mapping function to translate from fit space [0,1] to the actual parameter values
         //
-        opt_params[i]->set_mapped_value(x_start[i] + minus);
-        double min_value = opt_params[i]->get_cur_value();
-        opt_params[i]->set_mapped_value(x_start[i] + plus);
-        double max_value = opt_params[i]->get_cur_value();
-        opt_params[i]->set_mapped_value(x_start[i]);
-        // this one is last to leave the parameter with the correct value
-        double cntr_value = opt_params[i]->get_cur_value();
+        double min_value  = opt_params[i]->map_01_to_parm(fmax(0.0, x_start[i] + minus));
+        double cntr_value = opt_params[i]->map_01_to_parm(          x_start[i]         );
+        double max_value  = opt_params[i]->map_01_to_parm(fmin(1.0, x_start[i] + plus ));
         
         fprintf(result_fp, "%20s : %10.2lg [%10.2lg,%10.2lg] -%6.2lf%% +%6.2lf%%\n",
                 opt_params[i]->get_name(), cntr_value, min_value, max_value,

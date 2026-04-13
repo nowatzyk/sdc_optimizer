@@ -3,6 +3,7 @@
 #include "loop_complex.h"
 #include "eval_cache.h"
 #include "parameter.h"
+#include "binary_ellipsoid_fit.h"
 
 #include <bayesopt/bayesopt.hpp>
 #include <bayesopt/parameters.hpp>
@@ -837,7 +838,21 @@ void BOOptimizer::run_robustness(FILE *result_fp,
 {
     switch (submode) {
         case SUBMODE_BINARY:
-            run_binary(result_fp, opt_params, n);
+            // run_binary(result_fp, opt_params, n);
+            {
+                //
+                // This integration is just temporary to get things off the ground.
+                // Doing all the work in the constructor is not ideal, and cleaning
+                // things up after the work is done needs some more care.
+                //
+                // Also note that there are 4 variables that control how much computation
+                // is expended for the optimization and how that CPU time is used.
+                // Right now, the default parameters from the constructor are used,
+                // but this needs to be controllable from the spice deck.
+                // Adding this facility and choosing more sensible defaults is TBD
+                //
+                new bin_ellipsoid_fit(result_fp, opt_params, obj_funct, sum_fp);
+            }
             break;
         case SUBMODE_GRADIENT:
             run_gradient(result_fp, opt_params, n);
