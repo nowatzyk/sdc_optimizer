@@ -57,7 +57,7 @@ int     nl_lsq_fit::t_size = 0;
 nl_lsq_fit::nl_lsq_fit( int n_param, int n_var, int n_func,
                         double (**F)(const double *x, const double *p, int ip),
                         void (**D)(double *d, const double *x, const double *p, int ip),
-                        int (*Pok)(const double *p, int ip),
+                        int (*Pok)(double *p, int ip),
                         int ip_base,
                         int int_storage)
 //
@@ -105,6 +105,9 @@ nl_lsq_fit::nl_lsq_fit( int n_param, int n_var, int n_func,
 //             an acceptable parameter change is achieved, or 10 scale back attempts failed, it which
 //             case the solver returns a failure and the fit should be restarted with a better
 //             initial estimate for the parameters.
+//
+//             Note: PoK is intended not to touch the parameteres which were declared as const-pointer,
+//                   but I wanted to try some interference to see what happens...
 //
 // <ip_base> : This is just an integer that is added to the function number (starting from 0)
 //             and passed to the function and their derivative. It serves no other purpose and

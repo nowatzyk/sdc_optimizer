@@ -97,7 +97,7 @@ class nl_lsq_fit {                              // Least square fit object
     void    (**Dp)(double *d, const double *x, const double *p, int ip);
                                                 // Pointer to the derivative computing functions
 
-    int     (*P_ok)(const double *p, int ip);   // Parameter check function
+    int     (*P_ok)(double *p, int ip);         // Parameter check function
 
     accum_ty    *JtJ;                           // lower triangular part of the Normal matrix
     accum_ty    *JtR;                           // J^t * [yi - f(xi,beta)]
@@ -160,7 +160,7 @@ public:
                                                 // For each function there must be an array of [n_param]
                                                 // function pointers that point to the derivative
                                                 // of the function wrt. each parameter
-        int (*P_ok)(const double*, int) = nullptr, // Parameter check function (to express constraints)
+        int (*P_ok)(double*, int) = nullptr,    // Parameter check function (to express constraints)
         int ip_base = 0,                        // info-parameter base
         int int_storage = 128                   // If set to > 0, internal (to this class) storage is used
                                                 // (this is the default !)

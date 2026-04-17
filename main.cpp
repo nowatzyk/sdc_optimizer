@@ -30,6 +30,7 @@ extern "C" {
 #include "parser_interf.h"
 #include "anneal.h"
 #include "bo_optimizer.h"
+#include "bef_functions.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -233,6 +234,7 @@ int main(int argc, char *argv[])
 {
     rnd_init(0);
     
+//    nl_check_nde(5);
 //    test_eval_cache(7, 100, 3, 1.0e-3, 0.9);
 //    exit(1);
 

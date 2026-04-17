@@ -6,9 +6,39 @@
 
 #include "binary_ellipsoid_fit.h"
 
-const unsigned n_lm_iteration = 100;            // #of of iteration for the LM solver
+const unsigned n_lm_iteration = 150;            // #of of iteration for the LM solver
 #define _BIN_EFIT_DEBUG_                        // When defined, produce extra debugging info on stdout
 
+//#define _ADD_SYNTHETIC_FAILS_                 // When defined, it implements the idea that a fit is better
+                                                // when it has about the same number of fail ponts as it does
+                                                // pass points. So synthetic point are added when in the ray
+                                                // search a fail point was encountered and the outward direction
+                                                // has a search budget left. In this case, extra fail points
+                                                // are distributed along the outward ray without actually running
+                                                // a simulation. If the pass region is convex, these all must fail.
+                                                // And if it isn't convex, that island of functionality should not 
+                                                // be used anyway.
+                                                // Well, it turns out that that is a bad idea: the results are
+                                                // noticably worse. The pass region shrinks a litte, as expected
+                                                // as the fit becomes more conservative. That is good. But it is also,
+                                                // pushed in the wrong direction because of the too high influencs
+                                                // of the clusters of fail point. I left the code here to document
+                                                // a not so good idea. But also to allow more experimentation with
+                                                // this idea: the nl-lsq-fit procedure allows weights being given
+                                                // to data points. So by reducing the weight, it may be possible
+                                                // to preserve the positive impact (more conservative extimate).
+                                                
+#define _BIN_EFIT_PASS_ONLY_OUTLIER_            // If defined, only pass points will be considered to be an outlier
+                                                // The rationale is that for a fail to be considered to be
+                                                // an outlier, the ellipsoid extends over regions where the
+                                                // the simulation failed. This is is not a conservative thing to do
+
+//#define _BIN_EFIT_EXCLUDE_SIG_SHAPE_            // If defined, the sigmoid shape factor is not part of the 
+                                                // LM LSQ-fit procedure. It has a tendency to run away so that
+                                                // the fitted function becoems a setp function, which has
+                                                // undesirable consequences (lacks gradient to center the
+                                                // ellipsoid)
+                                                
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //  The points being expored are kept in an array to be replayed to the non-linear least square fit 
@@ -52,7 +82,7 @@ unsigned explored_points::add_pnt(double *pnt)
 
 bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>& op, parameter *of_p,
                                      FILE *s_fp, unsigned n_itr, unsigned n_ray_mul, unsigned n_can,
-                                     unsigned n_p_p_ray) :
+                                     unsigned n_p_p_ray, double of) :
     result_fp(result_fp), opt_params(op), of_ptr(of_p), sum_fp(s_fp)
 {
     n_dim = opt_params.size();
@@ -70,6 +100,7 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     n_candidates = n_can;
     n_probes_p_ray = n_p_p_ray;
     n_iterations = n_itr;
+    outlier_frac = of;
 
     ray_dirs = new double[n_rays * n_dim];
     
@@ -79,13 +110,22 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     }
     
     explore(x_start);                           // Explore the starting configuration
-    
+
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
     n_e_params = 2 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0);
     e_params = new double[n_e_params];
     estimate_initial_e_params();
     
     e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
                            bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
+#else
+    n_e_params = 2 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0) - 1;
+    e_params = new double[n_e_params];
+    estimate_initial_e_params();
+    
+    e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
+                           bef_function_ptr_1, bef_diff_function_ptr_1, bef_param_ok_1, n_dim, 0);
+#endif
     
     //
     // Now the actual work is done here. It is modular, so it could beacome a separate module...
@@ -328,6 +368,7 @@ void bin_ellipsoid_fit::ray_search_mode0(double ds, double de, double *pnt, doub
             return;                             // Probe budget is up, we are done.
             
         ray_search_mode0(ds, d, pnt, dir, (n_probes + 1) / 2); // Spend 1/2 of probe budget going forward
+#ifdef _ADD_SYNTHETIC_FAILS_
         n_probes /= 2;                          // spend the rest of it filling up with synthetic fail points
         if (n_probes <= 0)
             return;                             // Probe budget is up, we are done.
@@ -345,6 +386,7 @@ void bin_ellipsoid_fit::ray_search_mode0(double ds, double de, double *pnt, doub
             unsigned j = exp_pnts->add_pnt(probe_pnt);
             exp_pnts->meta(j) |= bef_pnt_synth; // Mark the extra points as being synthetic fails
         }
+#endif
     }
 }
 
@@ -375,8 +417,10 @@ void bin_ellipsoid_fit::ray_search_mode1(double ds, double de, double *pnt, doub
                     ray_search_mode0(ds - dd, ds, pnt, dir, n_probes - i);
             }
         } else {
+#ifdef _ADD_SYNTHETIC_FAILS_
             unsigned j = exp_pnts->add_pnt(probe_pnt);
             exp_pnts->meta(j) |= bef_pnt_synth; // Mark the extra points as being synthetic fails
+#endif
         }
     }
 }
@@ -462,16 +506,24 @@ void bin_ellipsoid_fit::estimate_initial_e_params()
     //
     // 3. Create guess for the initial parameter set
     //
-    e_params[0] = len;                          // Radius set to reach p0/p1
-    e_params[1] = 1.0;                          // Initial fuzziess
+    double *ep_ptr =  e_params;
+    *ep_ptr++ = len;                            // Radius set to reach p0/p1
+    
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
+    *ep_ptr++ = 1.0;                            // Initial fuzziess
+#else
+    set_sigmoid_shape(1.0);
+#endif
+    
     for (unsigned i = 0; i < n_dim; i++) {
         // set initial foci to the center point +/- 1/4 of the axis
-        e_params[2 + i]         = cntr[i] + 0.25 * len * axis[i];
-        e_params[2 + i + n_dim] = cntr[i] - 0.25 * len * axis[i];
+        ep_ptr[n_dim] = cntr[i] - 0.25 * len * axis[i];
+        *ep_ptr++     = cntr[i] + 0.25 * len * axis[i];
     }
     if (n_dim > 2) {
+        ep_ptr += n_dim;
         for (unsigned i = 0; i < (n_dim - 2); i++)
-            e_params[2 + 2*n_dim + i] = 1.0;    // scaling factor for the higher dimensions is set to 1
+            *ep_ptr++ = 1.0;    // scaling factor for the higher dimensions is set to 1
     }
 }
 
@@ -486,6 +538,12 @@ int bin_ellipsoid_fit::solve()
     // returns 0 on success, 1 on failure
     //
 {
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
+    e_params[1] = 1.0;              // LM tends to make the edge too sharp and paints itself into a corner
+#else
+    set_sigmoid_shape(1.0);
+#endif
+    
     int ec = e_fit->init(e_params);
     if (ec != 0) {
         //
@@ -513,21 +571,54 @@ int bin_ellipsoid_fit::solve()
         
         double cur_res, new_res;                // Current and new residuals
         ec = e_fit->solve_1s(cur_res, new_res);
+        e_fit->get_params(e_params);            // retrieve the new ellipsoid parameters
+        
 #ifdef _BIN_EFIT_DEBUG_
         printf(" %2u : cr= %.6lg  nr=%.6lg ec=%d - ", i,  cur_res, new_res, ec);
+        for (unsigned q = 0; q < n_e_params; q++)
+            printf(" %.4lg", e_params[q]);
+        printf("\n");
 #endif
+        
         if (ec == 1)
             break;
+        
+        if (ec == -3) {
+            fprintf(stderr, "LM iteration %d max a issue\n", i);
+            break;
+        }
+        
         if (ec < 0) {
             fprintf(stderr, "LM iteration %d failed: ec=%d\n", i, ec);
             return 1;
         }
+#ifdef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
+        set_sigmoid_shape(1.0 + fmin(30.0, 0.5 * (double) i));
+#endif
     }
-    
-    e_fit->get_params(e_params);                // retrieve the new ellipsoid parameters
+
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
     for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
         x_start[i] = (e_params[2 + i] + e_params[2 + n_dim + i]) * 0.5;
+#else
+    for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
+        x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+#endif
     
+#ifdef _BIN_EFIT_DEBUG_
+    //
+    // Print all hyper eillipsoids
+    //
+    static unsigned n_solve = 0;
+    for (unsigned i = 0; i < (n_dim - 1); i++)
+        for (unsigned j = i + 1; j < n_dim; j++) {
+            char buf[128];
+            sprintf(buf, "bef_ellipsoid_s%u_%u_%u.dat", n_solve, i, j);
+            bin_ellipsoid_fit::print_elliosoid(buf, i, j);
+        }
+    n_solve++;
+#endif
+
     return 0;
 }
 
@@ -538,8 +629,8 @@ struct outlier_rec {
 
 int oulier_key(const void *a, const void *b)
 {
-    if (((outlier_rec *) a)->discrepancy < ((outlier_rec *) b)->discrepancy) return -1;
-    if (((outlier_rec *) a)->discrepancy > ((outlier_rec *) b)->discrepancy) return  1;
+    if (((outlier_rec *) a)->discrepancy < ((outlier_rec *) b)->discrepancy) return  1;
+    if (((outlier_rec *) a)->discrepancy > ((outlier_rec *) b)->discrepancy) return -1;
     return 0;
 }
 
@@ -575,6 +666,11 @@ void bin_ellipsoid_fit::reject_outliers()
         
         if ((exp_pnts->meta(i) & (bef_pnt_synth | bef_pnt_squashed)) != 0ull)
             continue;                           // synthetic or squashed points are never outliers
+            
+#ifdef _BIN_EFIT_PASS_ONLY_OUTLIER_
+        if ((exp_pnts->meta(i) & bef_pnt_value) == 0ull)
+            continue;                           // Fails are not considered outliers
+#endif
 
         //
         // Note: it may be a good idea to consider only points with a passing value for being an outlier
@@ -611,12 +707,23 @@ void bin_ellipsoid_fit::print_results()
             dir[j] = (i == j) ? 1.0 : 0.0;      // set up direction vector: point along the positive i-th axis
         
         double plus, minus;
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_        
         int ec = ellipsoid_intersect(e_params, n_dim, x_start, dir, plus, &minus);
+#else
+        double ep_par[n_e_params + 1];
+        sigmoid_shape_include(ep_par, e_params, n_e_params + 1);
+        int ec = ellipsoid_intersect(ep_par, n_dim, x_start, dir, plus, &minus);
+#endif
         assert(ec == 0);                        // e_intersect is broken if it cannot do this!
         
         if (i > 1) {                            // for dimensions 2, 3, ... undo scaling
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_  
             plus  /= e_params[2 + 2*n_dim + (i - 2)];
             minus /= e_params[2 + 2*n_dim + (i - 2)];
+#else
+            plus  /= e_params[2 + 2*n_dim + (i - 2) - 1];
+            minus /= e_params[2 + 2*n_dim + (i - 2) - 1];
+#endif
         }
         
         //
@@ -626,9 +733,66 @@ void bin_ellipsoid_fit::print_results()
         double cntr_value = opt_params[i]->map_01_to_parm(          x_start[i]         );
         double max_value  = opt_params[i]->map_01_to_parm(fmin(1.0, x_start[i] + plus ));
         
-        fprintf(result_fp, "%20s : %10.2lg [%10.2lg,%10.2lg] -%6.2lf%% +%6.2lf%%\n",
+        fprintf(result_fp, "%20s : %10.4lg [%10.4lg,%10.4lg] -%6.2lf%% +%6.2lf%%\n",
                 opt_params[i]->get_name(), cntr_value, min_value, max_value,
                 -(min_value/cntr_value - 1.0) * 100.0, (max_value/cntr_value - 1.0) * 100.0);
     }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Misc. debugging and visualization functions
+//
+
+static const unsigned n_ellipsoid_pnts = 100;   // #of points to use when plotting an ellipsoid
+
+void  bin_ellipsoid_fit::print_elliosoid(char *fn, unsigned x, unsigned y)
+{
+    assert ((x != y) && (x < n_dim) && (y < n_dim));
+    FILE *of = fopen(fn, "w");
+    assert(of != nullptr);
+    
+    double cntr[n_dim];
+    double dir[n_dim];
+    for (unsigned i = 0; i < n_dim; i++)  {             // Find center of ellipsoid
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
+        cntr[i] = (e_params[2 + i] + e_params[2 + n_dim + i]) * 0.5;
+#else
+        cntr[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+#endif
+        dir[i] = 0.0;
+    }
+    
+    double t = 0.0;
+    double dt = (2.0 * M_PI) / (double) (n_ellipsoid_pnts - 1);
+    // It is intended that the first and last point overlap so that the line is closed
+    
+    for (unsigned i = 0; i < n_ellipsoid_pnts; i++) {
+        sincos(t, dir + y, dir + x);
+        double dist;
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
+        int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, dist);
+#else
+        double params_p1[n_e_params + 1];
+        sigmoid_shape_include(params_p1, e_params, n_e_params + 1);
+        int ec = ellipsoid_intersect(params_p1, n_dim, cntr, dir, dist);
+#endif
+        assert(ec == 0);
+        for (unsigned j = 0; j < n_dim; j++) {
+            if (j) fprintf(of, " ");
+            if (j < 2)
+                fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]));
+            else
+                fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_                
+                                     / e_params[2 + 2*n_dim + (j - 2)]));
+#else
+                                     / e_params[1 + 2*n_dim + (j - 2)]));
+#endif
+        }
+        fprintf(of, "\n");
+        t += dt;
+    }
+    fclose(of);
 }
 

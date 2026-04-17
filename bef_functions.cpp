@@ -4,7 +4,6 @@
 
 #include "binary_ellipsoid_fit.h"
 
-
 //
 // Contraints that are ment to prevent the ellipsoid from degenerating:
 //
@@ -15,7 +14,9 @@ const double min_focal_sum = 0.01;      // minimal focal_sum of the ellipsoid
 //  with 0 excentricity.
 
 const double min_a = 0.001;             // The shape factor of the sigmoid function shall not 
-// go negative or near 0: the gradient would vanish and LM is lost 
+// go negative or near 0: the gradient would vanish and LM is lost
+const double max_a = 50.0;              // The transition becomes too sharp, no more gradient
+                                        // LM gets stuck on a solution can cannot converge anymore
 
 const double min_foci_d = 0.01;         // If the foci merge, their parameters loose independence and
 // mayhem would ensure
@@ -265,7 +266,7 @@ void diff_n_dim_ellipsoid_gcs(double *diff, const double *pnt, const double *par
 // Associated functions
 //
 
-int bef_param_ok (const double *param, int n_dimensions)
+int bef_param_ok (double *param, int n_dimensions)
 //
 // Parameter check function to provide some guard rails against LM missbehaving
 //
@@ -274,13 +275,19 @@ int bef_param_ok (const double *param, int n_dimensions)
     
     if (param[1] < min_a) return 0;         // sigmoid shape must remain positive (or mayhem ensures)
     
+    if (param[1] > max_a) return 0;         // shape is too sharp (LM can wander off in this direction
+
     double fd = 0.0;
     for (unsigned i = 0; i < n_dimensions; i++) {
-        double t = param[2 + i] - param[2 + n_dimensions + i];
+        double t0 = param[2 + i];
+        if ((t0 < 0.0) || (1.0 < t0))   return 0;   // Coordinate out of range [0,1]
+        double t1 = param[2 + n_dimensions + i];
+        if ((t1 < 0.0) || (1.0 < t1))   return 0;   // Dito for the second focal point
+        double t = t0 - t1;
         fd += t * t;
     }
     
-    if (fd < (min_foci_d * min_foci_d)) return 0; // foci too close
+    if (fd < (min_foci_d * min_foci_d)) return 0;   // foci too close
     
     if (n_dimensions > 2) {
         const double *s = param + (2 + 2*n_dimensions);
@@ -297,6 +304,83 @@ double (*bef_function_ptr[1])(const double *x, const double *pa, int ip) =
     {n_dim_ellipsoid_gcs};
 void   (*bef_diff_function_ptr[1])(double *d, const double *x, const double *pa, int ip) =
     {diff_n_dim_ellipsoid_gcs};
+    
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// The following set of wrapper functions elimineates the sigmoid shape-factor from being
+// subject to the non-linear Levenberg-Marquard least square fit procedure. This exclusion
+// follows the observation that the LM alggorithm tens to increase the shape factor <a> beyond reason.
+// This is actually not surprising: the function being fitted is binary: pass or fail, nothing
+// in between. Thus LM tries to make a step function and increasing <a> to a few 1000's will do
+// nicely. But as a consequnece, the <a> term will drown out any gradient and can result in a poor fit 
+// for the other parameters. Trying to control this run-away behavior via the P_ok() function is
+// futile. Thus the following set of functions is use to excluse the sigmoid shape factor from the 
+// LSQ fit. The shape factor is explicitly set. It should be modest at first and then can be increased.
+// Once a solution is found this way, a final fit including the shape sigmoid shape factor can be used.
+//
+
+static double sigmoid_shape_fac = 1.0;  // The "a" parameter in the above functions
+
+void set_sigmoid_shape(double a)
+{
+    assert(a > min_a);
+    sigmoid_shape_fac = a;
+}
+
+void sigmoid_shape_exclude  (double *param_m1, const double *param, unsigned np)
+// Removes the sigmoid shape factor from the output parameter vector <param_m1>
+// Note: <np> is the #of parameters including the sigmoid shape factor
+{
+    param_m1[0]       = param[0];
+
+    for (unsigned i = 2; i < np; i++)
+        param_m1[i - 1] = param[i];
+}
+
+void sigmoid_shape_include  (double *param_p1, const double *param, unsigned np)
+// Adds the sigmoid shape factor to the output parameter vector <param_p1>
+// Note: <np> is the #of parameters including the sigmoid shape factor
+{
+    param_p1[0] = param[0];
+    param_p1[1] = sigmoid_shape_fac;
+    
+    for (unsigned i = 2; i < np; i++)
+        param_p1[i] = param[i - 1];
+}
+
+double n_dim_ellipsoid_gcs_1(const double *pnt, const double *param, int n_dimensions)
+{
+    unsigned n = 2 + 2 * n_dimensions + ( (n_dimensions > 2) ? (n_dimensions - 2) : 0 );
+    double param_p1[n];
+    sigmoid_shape_include(param_p1, param, n);
+    
+    return n_dim_ellipsoid_gcs(pnt, param_p1, n_dimensions);
+}
+
+void diff_n_dim_ellipsoid_gcs_1(double *diff, const double *pnt, const double *param, int n_dimensions)
+{
+    unsigned n = 2 + 2 * n_dimensions + ( (n_dimensions > 2) ? (n_dimensions - 2) : 0 );
+    double param_p1[n];
+    sigmoid_shape_include(param_p1, param, n);
+
+    diff_n_dim_ellipsoid_gcs(diff, pnt, param_p1, n_dimensions);
+    
+    sigmoid_shape_exclude(diff, diff, n);
+}
+
+int bef_param_ok_1 (double *param, int n_dimensions)
+{
+    unsigned n = 2 + 2 * n_dimensions + ( (n_dimensions > 2) ? (n_dimensions - 2) : 0 );
+    double param_p1[n];
+    sigmoid_shape_include(param_p1, param, n);
+    
+    return bef_param_ok(param_p1, n_dimensions);
+}
+
+double (*bef_function_ptr_1[1])(const double *x, const double *pa, int ip) =
+    {n_dim_ellipsoid_gcs_1};
+void   (*bef_diff_function_ptr_1[1])(double *d, const double *x, const double *pa, int ip) =
+    {diff_n_dim_ellipsoid_gcs_1};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -313,14 +397,15 @@ void nl_check_nde(unsigned n_dim)
     srandom(123);
     assert(n_dim > 1);
     
-    double *x = new double[n_dim];	// Some random point in the first quadrant unity n-cube
+    double *x = new double[n_dim];      // Some random point in the first quadrant unity n-cube
     // must not 0
     for (unsigned i = 0; i < n_dim; i++)
         x[i] = (double) random() / (double) 0x7fffffff; // the numerator is 2^31-1, max value of random
         
     double *param = new double[2 + 2*n_dim + ((n_dim > 2) ? n_dim - 2 : 0)];
-    param[0] = 0.4123;                      // focal_sum > 0
-    param[1] = 0.7777;                      // shape factor > 0
+    param[0] = 0.4123;                  // focal_sum > 0
+    param[1] = 0.7777;                  // shape factor > 0
+    sigmoid_shape_fac = 0.7777;
     
     for (unsigned i = 0; i < n_dim; i++) {
         // make up two foci within the unity n-cube
@@ -335,9 +420,9 @@ void nl_check_nde(unsigned n_dim)
         for (unsigned i = 0; i < n_scales; i++)
             param[2 + 2*n_dim + i] = 1.5 - ((double) random() / (double) 0x7fffffff); // in [0.5,1.5]
             
-        check_diffs(2 + 2*n_dim + n_scales, 0, x, param, n_dim_ellipsoid_gcs, diff_n_dim_ellipsoid_gcs);
+        check_diffs(2 + 2*n_dim + n_scales - 1, n_dim, x, param, n_dim_ellipsoid_gcs_1, diff_n_dim_ellipsoid_gcs_1);
     } else
-        check_diffs(2 + 2*n_dim, 0, x, param, n_dim_ellipsoid_gcs, diff_n_dim_ellipsoid_gcs);
+        check_diffs(2 + 2*n_dim - 1, n_dim, x, param, n_dim_ellipsoid_gcs_1, diff_n_dim_ellipsoid_gcs_1);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -379,8 +464,8 @@ int ellipsoid_intersect (
 // allong a given direction <dir>.
 //
 // It returns a 0 upon success and sets the desired distance.
-// A return value of 1 signifies a problem (say start point is not within ellipsoid)
-// inwhich case the <dist> variable will remain unchanged
+// A return value of 1 signifies a problem (say the start point is not within the ellipsoid)
+// in which case the <dist> variable will remain unchanged
 //
 {
     double fs  = param[0];
@@ -395,9 +480,7 @@ int ellipsoid_intersect (
     }
     
     double nasq = vect_scalar_product(a, a, n_dim);     // = |a|^2
-    nasq *= nasq;
     double nbsq = vect_scalar_product(b, b, n_dim);     // = |b|^2
-    nbsq *= nbsq;
     
     for (unsigned i = 0; i < n_dim; i++)
         a[i] = b[i] - a[i];             // now a = b - a
