@@ -109,22 +109,21 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
         exit(1);
     }
     
+    warn_high = 0;                              // No warnings issued so far
+    warn_low = 0;
+    
     explore(x_start);                           // Explore the starting configuration
 
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
     n_e_params = 2 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0);
     e_params = new double[n_e_params];
     estimate_initial_e_params();
     
+#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_    
     e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
                            bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
 #else
-    n_e_params = 2 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0) - 1;
-    e_params = new double[n_e_params];
-    estimate_initial_e_params();
-    
-    e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
-                           bef_function_ptr_1, bef_diff_function_ptr_1, bef_param_ok_1, n_dim, 0);
+    e_fit = new nl_lsq_fit(n_e_params - 1, n_dim, 1,
+                           bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
 #endif
     
     //
@@ -160,7 +159,7 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
 #endif
 }
 
-unsigned bin_ellipsoid_fit::eval_pnt(double *pnt)
+unsigned bin_ellipsoid_fit::eval_pnt(double *pnt, int *ind)
 {
     double score = ev_cache->lookup(pnt);
     if (isfinite(score))
@@ -176,6 +175,9 @@ unsigned bin_ellipsoid_fit::eval_pnt(double *pnt)
     ev_cache->store(pnt, score);                // add datum to the cache
     
     unsigned i = exp_pnts->add_pnt(pnt);
+    if (ind != nullptr)
+        *ind = (int) i;                         // An int is used so that the caller can initialize it to -1
+                                                // to see that a point was actually added by testing the sign
     if (score > 0.0) {
         exp_pnts->meta(i) |= bef_pnt_value;
         return 1;
@@ -279,9 +281,37 @@ void bin_ellipsoid_fit::ray_search(double *pnt, double *dir)
         // Note: the clipping is needed because rounding errors can conspire to move the point
         //       slightly outside the parameter range of [0,1] that will cause trouble downstream
 
-    if (eval_pnt(probe_pnt) > 0)            // The end point is a pass (un-expected!)
+    int ind = -1;                           // may need to update meta-data
+    if (eval_pnt(probe_pnt, &ind) > 0) {    // The end point is a pass (un-expected!)
+        //
+        // This can cause problems: if this happens, it means that there is at least one circuit parameter
+        // that is constrained by the designer and not by the circuit failing. In other words, the Shmoo
+        // pass region touches the boarder of the parameter space. Consequently, it is possible that the
+        // fitting process of the pass ellipsoid can be pushed out of the parameter space. If the center of
+        // the ellipsoid exits the parameter space, then the fit will fail because the center will be rejected
+        // as it is no longer within the design space. To make this outcome less likeley, the pass point at
+        // the parameter space boundary will be turned into a squashed fail point. Also, a warning will
+        // be issued to alert the user that this happened.
+        //
+        if (ind >= 0) {                     // This was not a cache hit
+            exp_pnts->meta(ind) |=  bef_pnt_squashed; // squash this point
+            exp_pnts->meta(ind) &= ~bef_pnt_value;
+        }
+        for (unsigned i = 0; i < n_dim; i++) {
+            double t = probe_pnt[i];
+            if ((fabs(t) < 1.0e-4) && !(warn_low & (1u << i))) {
+                warn_low |= 1u << i;        // Will never have more than 32 dimensions!
+                fprintf(stderr, "Warning: Parameter %s has a passing region extending below its lower bound\n",
+                        opt_params[i]->get_name());
+            }
+            if ((fabs(t - 1.0) < 1.0e-4) && !(warn_high & (1u << i))) {
+                warn_high |= 1u << i;        // Will never have more than 32 dimensions!
+                fprintf(stderr, "Warning: Parameter %s has a passing region extending above its upper bound\n",
+                        opt_params[i]->get_name());
+            }
+        }
         ray_search_mode1(0.0, 1.0, pnt, dir, n_probes_p_ray);
-    else                                    // The end point is a fail
+    } else                                  // The end point is a fail
         ray_search_mode0(0.0, 1.0, pnt, dir, n_probes_p_ray);
     
     //
@@ -509,22 +539,17 @@ void bin_ellipsoid_fit::estimate_initial_e_params()
     double *ep_ptr =  e_params;
     *ep_ptr++ = len;                            // Radius set to reach p0/p1
     
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
-    *ep_ptr++ = 1.0;                            // Initial fuzziess
-#else
-    set_sigmoid_shape(1.0);
-#endif
-    
     for (unsigned i = 0; i < n_dim; i++) {
         // set initial foci to the center point +/- 1/4 of the axis
         ep_ptr[n_dim] = cntr[i] - 0.25 * len * axis[i];
         *ep_ptr++     = cntr[i] + 0.25 * len * axis[i];
     }
+    ep_ptr += n_dim;
     if (n_dim > 2) {
-        ep_ptr += n_dim;
         for (unsigned i = 0; i < (n_dim - 2); i++)
-            *ep_ptr++ = 1.0;    // scaling factor for the higher dimensions is set to 1
+            *ep_ptr++ = 1.0;                    // scaling factor for the higher dimensions is set to 1
     }
+    *ep_ptr = 1.0;                              // Initial fuzziess
 }
 
 int bin_ellipsoid_fit::solve()
@@ -538,12 +563,8 @@ int bin_ellipsoid_fit::solve()
     // returns 0 on success, 1 on failure
     //
 {
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
-    e_params[1] = 1.0;              // LM tends to make the edge too sharp and paints itself into a corner
-#else
-    set_sigmoid_shape(1.0);
-#endif
-    
+    e_params[n_e_params - 1] = 1.0;  // LM tends to make the edge too sharp and paints itself into a corner
+  
     int ec = e_fit->init(e_params);
     if (ec != 0) {
         //
@@ -593,17 +614,12 @@ int bin_ellipsoid_fit::solve()
             return 1;
         }
 #ifdef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
-        set_sigmoid_shape(1.0 + fmin(30.0, 0.5 * (double) i));
+        e_params[n_e_params - 1] = 1.0 + fmin(30.0, 0.5 * (double) i));
 #endif
     }
 
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
-    for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
-        x_start[i] = (e_params[2 + i] + e_params[2 + n_dim + i]) * 0.5;
-#else
     for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
         x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
-#endif
     
 #ifdef _BIN_EFIT_DEBUG_
     //
@@ -707,23 +723,12 @@ void bin_ellipsoid_fit::print_results()
             dir[j] = (i == j) ? 1.0 : 0.0;      // set up direction vector: point along the positive i-th axis
         
         double plus, minus;
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_        
         int ec = ellipsoid_intersect(e_params, n_dim, x_start, dir, plus, &minus);
-#else
-        double ep_par[n_e_params + 1];
-        sigmoid_shape_include(ep_par, e_params, n_e_params + 1);
-        int ec = ellipsoid_intersect(ep_par, n_dim, x_start, dir, plus, &minus);
-#endif
         assert(ec == 0);                        // e_intersect is broken if it cannot do this!
         
         if (i > 1) {                            // for dimensions 2, 3, ... undo scaling
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_  
-            plus  /= e_params[2 + 2*n_dim + (i - 2)];
-            minus /= e_params[2 + 2*n_dim + (i - 2)];
-#else
-            plus  /= e_params[2 + 2*n_dim + (i - 2) - 1];
-            minus /= e_params[2 + 2*n_dim + (i - 2) - 1];
-#endif
+            plus  /= e_params[1 + 2*n_dim + (i - 2)];
+            minus /= e_params[1 + 2*n_dim + (i - 2)];
         }
         
         //
@@ -755,11 +760,7 @@ void  bin_ellipsoid_fit::print_elliosoid(char *fn, unsigned x, unsigned y)
     double cntr[n_dim];
     double dir[n_dim];
     for (unsigned i = 0; i < n_dim; i++)  {             // Find center of ellipsoid
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
-        cntr[i] = (e_params[2 + i] + e_params[2 + n_dim + i]) * 0.5;
-#else
         cntr[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
-#endif
         dir[i] = 0.0;
     }
     
@@ -770,13 +771,7 @@ void  bin_ellipsoid_fit::print_elliosoid(char *fn, unsigned x, unsigned y)
     for (unsigned i = 0; i < n_ellipsoid_pnts; i++) {
         sincos(t, dir + y, dir + x);
         double dist;
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
         int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, dist);
-#else
-        double params_p1[n_e_params + 1];
-        sigmoid_shape_include(params_p1, e_params, n_e_params + 1);
-        int ec = ellipsoid_intersect(params_p1, n_dim, cntr, dir, dist);
-#endif
         assert(ec == 0);
         for (unsigned j = 0; j < n_dim; j++) {
             if (j) fprintf(of, " ");
@@ -784,11 +779,7 @@ void  bin_ellipsoid_fit::print_elliosoid(char *fn, unsigned x, unsigned y)
                 fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]));
             else
                 fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_                
-                                     / e_params[2 + 2*n_dim + (j - 2)]));
-#else
                                      / e_params[1 + 2*n_dim + (j - 2)]));
-#endif
         }
         fprintf(of, "\n");
         t += dt;

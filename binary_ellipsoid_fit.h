@@ -77,13 +77,15 @@ class bin_ellipsoid_fit {
     
     EvalCache           *ev_cache;              // Perhaps saves some JoSIM calls (doubtful)
     
+    unsigned            warn_high, warn_low;    // Bit-vectors to suppress range limit warnings
+    
     FILE                *result_fp;             // Reporting output file
     
     vector<const_parameter *>& opt_params;      // The actual parametes to be expolred
     parameter           *of_ptr;                // The objective function: >0 is pass, fail otherwise (inc. NAN)
     FILE                *sum_fp;                // Logs all evalualtion
     
-    unsigned            eval_pnt(double *pnt);  // Evaluate one point
+    unsigned            eval_pnt(double *pnt, int *ind = nullptr);  // Evaluate one point
     void                explore(double *pnt);   // Explore the passing region from <pnt>
     void                ray_search(double *pnt, double *dir);
                                                 // probe points along the ray from point <pnt> in direction <dir>

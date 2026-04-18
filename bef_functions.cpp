@@ -74,11 +74,23 @@ static void apply_scale(const double *pnt, const double *f0, const double *f1,
 
 double n_dim_ellipsoid_gcs(const double *pnt, const double *param, int n_dimensions)
 {
+    //
+    // Parameter layout (as offset into the <param> array:
+    // 0                : focal-sum 
+    // 1                : coordinates of focal point 0
+    // 1+n_dimesnsions  : coordinates of focal point 1
+    // 1+2*n_dimensions : scale factors for all dimensions > 1 (n_dimensions - 2) numbers
+    // ...+1            : sigmoid shape factor <a>
+    //
+    // Note: This parameter layout differs from the initial version, which had <a> in second place
+    //       This change was needed to allow fitting with *and* without <a> being subject to
+    //       the LM LSQ fit procedure, by simply leaving out the last parameter.
+    //
     double  fs = param[0];
-    double   a = param[1];
-    const double *f0 = param + 2;
+    const double *f0 = param + 1;
     const double *f1 = f0 + n_dimensions;
     const double  *s = f1 + n_dimensions;   // n_dimensions-2 scale factors
+    double   a = param[1 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0)];
     
     // Apply scaling transform
     double pnt_t[n_dimensions];
@@ -140,14 +152,14 @@ double n_dim_ellipsoid_gcs(const double *pnt, const double *param, int n_dimensi
 void diff_n_dim_ellipsoid_gcs(double *diff, const double *pnt, const double *param, int n_dimensions)
 {
     double  fs = param[0];
-    double   a = param[1];
-    const double *f0 = param + 2;
+    const double *f0 = param + 1;
     const double *f1 = f0 + n_dimensions;
-    const double  *s = f1 + n_dimensions;   // n-2 scale factors
+    const double  *s = f1 + n_dimensions;   // n_dimensions-2 scale factors
+    double   a = param[1 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0)];
     
-    double *df0 = diff + 2;
-    double *df1 = diff + 2 + n_dimensions;
-    double *ds  = diff + 2 + 2*n_dimensions; // n-2 scale derivatives
+    double *df0 = diff + 1;
+    double *df1 = diff + 1 + n_dimensions;
+    double *ds  = diff + 1 + 2*n_dimensions; // n-2 scale derivatives
     
     // --- Apply scaling transform ---
     double pnt_t[n_dimensions];
@@ -189,7 +201,7 @@ void diff_n_dim_ellipsoid_gcs(double *diff, const double *pnt, const double *par
     
     // --- d phi / d fs,  d phi / d a ---
     diff[0] = a_sp / gc;
-    diff[1] = sprime * dr / gc;
+    diff[1 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0)] = sprime * dr / gc;
     
     // --- Precompute dot products for direct f0/f1 derivatives ---
     double gc_dot_pnt_f0 = 0.0, gc_dot_pnt_f1 = 0.0;
@@ -273,114 +285,45 @@ int bef_param_ok (double *param, int n_dimensions)
 {
     if (param[0] < min_focal_sum) return 0; // Focal sum too small
     
-    if (param[1] < min_a) return 0;         // sigmoid shape must remain positive (or mayhem ensures)
+    double a = param[1 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0)];
+    if (a < min_a) return 0;                // sigmoid shape must remain positive (or mayhem ensures)
     
-    if (param[1] > max_a) return 0;         // shape is too sharp (LM can wander off in this direction
+    if (a > max_a) return 0;                // shape is too sharp (LM can wander off in this direction
 
     double fd = 0.0;
     for (unsigned i = 0; i < n_dimensions; i++) {
-        double t0 = param[2 + i];
-        if ((t0 < 0.0) || (1.0 < t0))   return 0;   // Coordinate out of range [0,1]
-        double t1 = param[2 + n_dimensions + i];
-        if ((t1 < 0.0) || (1.0 < t1))   return 0;   // Dito for the second focal point
-        double t = t0 - t1;
+        double t0 = param[1 + i];
+        double t1 = param[1 + n_dimensions + i];
+        
+        double t = (t0 + t1) * 0.5;         // Center of ellipsoid coordinate
+        if ((t < 0.0) || (1.0 < t))
+            return 0;                       // Must be within [0,1]
+
+        t = t0 - t1;
         fd += t * t;
     }
     
-    if (fd < (min_foci_d * min_foci_d)) return 0;   // foci too close
+    if (fd < (min_foci_d * min_foci_d))
+        return 0;                           // foci too close
     
     if (n_dimensions > 2) {
-        const double *s = param + (2 + 2*n_dimensions);
+        const double *s = param + (1 + 2*n_dimensions);
         for (unsigned i = 0; i < (n_dimensions - 2); i++)
             if ((s[i] < gcs_min_scale) || (s[i] > gcs_max_scale))
                 return 0;                   // scale out of range
     }
     
-    return 1;               // Parameters are OK
+    return 1;                               // Parameters are OK
 }
 
+//
 // nl_lsq_fit expects an array of function pointers:
+//
 double (*bef_function_ptr[1])(const double *x, const double *pa, int ip) =
     {n_dim_ellipsoid_gcs};
 void   (*bef_diff_function_ptr[1])(double *d, const double *x, const double *pa, int ip) =
     {diff_n_dim_ellipsoid_gcs};
     
-///////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// The following set of wrapper functions elimineates the sigmoid shape-factor from being
-// subject to the non-linear Levenberg-Marquard least square fit procedure. This exclusion
-// follows the observation that the LM alggorithm tens to increase the shape factor <a> beyond reason.
-// This is actually not surprising: the function being fitted is binary: pass or fail, nothing
-// in between. Thus LM tries to make a step function and increasing <a> to a few 1000's will do
-// nicely. But as a consequnece, the <a> term will drown out any gradient and can result in a poor fit 
-// for the other parameters. Trying to control this run-away behavior via the P_ok() function is
-// futile. Thus the following set of functions is use to excluse the sigmoid shape factor from the 
-// LSQ fit. The shape factor is explicitly set. It should be modest at first and then can be increased.
-// Once a solution is found this way, a final fit including the shape sigmoid shape factor can be used.
-//
-
-static double sigmoid_shape_fac = 1.0;  // The "a" parameter in the above functions
-
-void set_sigmoid_shape(double a)
-{
-    assert(a > min_a);
-    sigmoid_shape_fac = a;
-}
-
-void sigmoid_shape_exclude  (double *param_m1, const double *param, unsigned np)
-// Removes the sigmoid shape factor from the output parameter vector <param_m1>
-// Note: <np> is the #of parameters including the sigmoid shape factor
-{
-    param_m1[0]       = param[0];
-
-    for (unsigned i = 2; i < np; i++)
-        param_m1[i - 1] = param[i];
-}
-
-void sigmoid_shape_include  (double *param_p1, const double *param, unsigned np)
-// Adds the sigmoid shape factor to the output parameter vector <param_p1>
-// Note: <np> is the #of parameters including the sigmoid shape factor
-{
-    param_p1[0] = param[0];
-    param_p1[1] = sigmoid_shape_fac;
-    
-    for (unsigned i = 2; i < np; i++)
-        param_p1[i] = param[i - 1];
-}
-
-double n_dim_ellipsoid_gcs_1(const double *pnt, const double *param, int n_dimensions)
-{
-    unsigned n = 2 + 2 * n_dimensions + ( (n_dimensions > 2) ? (n_dimensions - 2) : 0 );
-    double param_p1[n];
-    sigmoid_shape_include(param_p1, param, n);
-    
-    return n_dim_ellipsoid_gcs(pnt, param_p1, n_dimensions);
-}
-
-void diff_n_dim_ellipsoid_gcs_1(double *diff, const double *pnt, const double *param, int n_dimensions)
-{
-    unsigned n = 2 + 2 * n_dimensions + ( (n_dimensions > 2) ? (n_dimensions - 2) : 0 );
-    double param_p1[n];
-    sigmoid_shape_include(param_p1, param, n);
-
-    diff_n_dim_ellipsoid_gcs(diff, pnt, param_p1, n_dimensions);
-    
-    sigmoid_shape_exclude(diff, diff, n);
-}
-
-int bef_param_ok_1 (double *param, int n_dimensions)
-{
-    unsigned n = 2 + 2 * n_dimensions + ( (n_dimensions > 2) ? (n_dimensions - 2) : 0 );
-    double param_p1[n];
-    sigmoid_shape_include(param_p1, param, n);
-    
-    return bef_param_ok(param_p1, n_dimensions);
-}
-
-double (*bef_function_ptr_1[1])(const double *x, const double *pa, int ip) =
-    {n_dim_ellipsoid_gcs_1};
-void   (*bef_diff_function_ptr_1[1])(double *d, const double *x, const double *pa, int ip) =
-    {diff_n_dim_ellipsoid_gcs_1};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -403,14 +346,14 @@ void nl_check_nde(unsigned n_dim)
         x[i] = (double) random() / (double) 0x7fffffff; // the numerator is 2^31-1, max value of random
         
     double *param = new double[2 + 2*n_dim + ((n_dim > 2) ? n_dim - 2 : 0)];
-    param[0] = 0.4123;                  // focal_sum > 0
-    param[1] = 0.7777;                  // shape factor > 0
-    sigmoid_shape_fac = 0.7777;
+    param[0] = 0.8123;                  // focal_sum > 0 (Note: should be larger than the foci distance)
+    param[1 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0)] = 0.7777; // shape factor > 0
+
     
     for (unsigned i = 0; i < n_dim; i++) {
         // make up two foci within the unity n-cube
-        param[i + 2]                = (double) random() / (double) 0x7fffffff;	
-        param[i + 2 + n_dim] = (double) random() / (double) 0x7fffffff;	
+        param[i + 1]         = (double) random() / (double) 0x7fffffff;
+        param[i + 1 + n_dim] = (double) random() / (double) 0x7fffffff;
     }
     
     printf("Checking Diff-function for NDE:\n");
@@ -418,11 +361,11 @@ void nl_check_nde(unsigned n_dim)
     if (n_dim > 2) {
         unsigned n_scales = n_dim - 2;
         for (unsigned i = 0; i < n_scales; i++)
-            param[2 + 2*n_dim + i] = 1.5 - ((double) random() / (double) 0x7fffffff); // in [0.5,1.5]
+            param[1 + 2*n_dim + i] = 1.5 - ((double) random() / (double) 0x7fffffff); // in [0.5,1.5]
             
-        check_diffs(2 + 2*n_dim + n_scales - 1, n_dim, x, param, n_dim_ellipsoid_gcs_1, diff_n_dim_ellipsoid_gcs_1);
+        check_diffs(2 + 2*n_dim + n_scales, n_dim, x, param, n_dim_ellipsoid_gcs, diff_n_dim_ellipsoid_gcs);
     } else
-        check_diffs(2 + 2*n_dim - 1, n_dim, x, param, n_dim_ellipsoid_gcs_1, diff_n_dim_ellipsoid_gcs_1);
+        check_diffs(2 + 2*n_dim, n_dim, x, param, n_dim_ellipsoid_gcs, diff_n_dim_ellipsoid_gcs);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -469,8 +412,8 @@ int ellipsoid_intersect (
 //
 {
     double fs  = param[0];
-    const double *f0 = param + 2;
-    const double *f1 = param + 2 + n_dim;
+    const double *f0 = param + 1;
+    const double *f1 = param + 1 + n_dim;
     
     double *a = new double[n_dim];      // = point - f0
     double *b = new double[n_dim];      // = point - f1
