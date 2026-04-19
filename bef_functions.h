@@ -27,5 +27,7 @@ int ellipsoid_intersect (
 
 double vect_scalar_product(const double *va, const double *vb, unsigned n_dim);
 void vect_normalize(double *vect, unsigned n_dim);
+void generate_random_dir(double *dir, unsigned n_dim);
+double clip_to_unity(double *pnt, double *dir, unsigned n_dim);
 
 #endif

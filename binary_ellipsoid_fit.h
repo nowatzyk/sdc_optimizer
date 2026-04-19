@@ -95,6 +95,7 @@ class bin_ellipsoid_fit {
     void                estimate_initial_e_params(); // Make up an estimate for the fit to start from
     int                 solve();                // perform one iteration of the LSQ fit 
     void                reject_outliers();      // Filter out outliers
+    void                e_shell_search(unsigned n); // explore points on the ellipsoid shell
     
     unsigned            n_iterations;           // #of LM-fitting steps to be performed
     unsigned            n_rays;                 // #of extra rays to cast

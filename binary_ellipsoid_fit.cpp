@@ -131,7 +131,8 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     //
     for (unsigned i = 0; i < n_iterations; i++) {
         if (i > 0) {
-            explore(x_start);
+            //explore(x_start);
+            e_shell_search(200);  // <a> should be faily large!
             reject_outliers();
         }
         solve();
@@ -222,9 +223,7 @@ void bin_ellipsoid_fit::explore(double* pnt)
         double best_score = 2.0;
         
         for (unsigned j = 0; j < n_candidates; j++) {
-            for (unsigned k = 0; k < n_dim; k++)
-                dir[k] = rnd_01d() - 0.5;
-            vect_normalize(dir, n_dim);
+            generate_random_dir(dir, n_dim);
             // <dir> is the candidate 
             
             double max_cs = 0.0;
@@ -262,14 +261,8 @@ void bin_ellipsoid_fit::ray_search(double *pnt, double *dir)
     //
     // scale <dir> so that <pnt>+<dir> is a point on the unity parameter bounding box
     //
-    double s = 2.0;     // because ||dir|| = 1, <pnt>+2*<dir> is guaranteed to be outside. <s> can only shrink
-    for (unsigned i = 0; i < n_dim; i++) {
-        double d_min = -pnt[i];
-        double d_max = 1.0 - pnt[i];
-        // s*dir[i] must be in [d_min,d_max]
-        if ((s * dir[i]) > d_max) s = d_max / dir[i];
-        if ((s * dir[i]) < d_min) s = d_min / dir[i];
-    }
+    double s = clip_to_unity(pnt, dir, n_dim);
+    assert(s >= 0.0);                       // Could be 0 if the point is on the unity cube surface
     for (unsigned i = 0; i < n_dim; i++)
         dir[i] *= s;
     
@@ -454,6 +447,93 @@ void bin_ellipsoid_fit::ray_search_mode1(double ds, double de, double *pnt, doub
         }
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// ellipsoid shell search: the ray search above is rather inefficient wrt information geathering about
+// the shape of the passing region because most points are either inside or outside the ellipsoid. Hence
+// they convey little information. The shell search only consideres points near the surface of the
+// ellipsoid. Ideally, if the ellipsod matches the shape of the passing region, this means that there
+// is a 50/50 chance that a point on the shell is inside or outside of the passing region, thus determining
+// that design point via simulation yields the most information.
+//
+// The e-shell search requires that there is an approximate ellipsoid established. It will then select random
+// points near the surface of the ellipsoid. The radial distribution of these points is governed by the 
+// shape factor <a> to the sigmoid function. If <a> is large, then the points will be on the eillipsoid 
+// surface. If <a> is small, the radial distribution is wider. The algorithm used here is drawing a
+// random number from a uniform distribution over [0,1], and finding the intersect point with the sigmoid
+// function of the ellipsoid function.
+//
+// There are a few notable approximations made here: the direction of the probe point from the ellipsoid center
+// are drawn from a uniform distribution on a n-dimensional hyper sphere: it isn't uniform on the 
+// ellipsoid, rather has lower density near the poles wrt the major axis. The secon approximation is that
+// the distance to the ellipsoid surface is along the ray from the center, not perpendicular to the surface
+// and also different from the gradient corrected distance that is used in the ellipsoid definition used
+// by the fit. That is A-Ok, because all of this is a heuristic: there is no perfect way to do this, just
+// inifinitelt many heuristics: the milage varies with the actual shape of the Shmoo plot.
+//
+
+void bin_ellipsoid_fit::e_shell_search(unsigned n)
+{
+    for (unsigned i = 0; i < n; i++) {
+        double dir[n_dim];
+        generate_random_dir(dir, n_dim);
+        
+        double d_e;                             // Distance to ellisoid surface
+        int ec = ellipsoid_intersect(e_params, n_dim, x_start, dir, d_e);
+        assert(ec == 0);                        // x_start ought to be the ellipsoid center!
+        
+        double t;
+        do {
+            t = rnd_01d();
+        } while ((t <= 0.0) || (t >= 1.0));     // Make sure t is in (0,1) excluding 0 and 1
+        d_e += log(1.0 / t - 1.0) / e_params[n_e_params - 1]; // apply inverse sigmoid function to fuzzy shell
+        
+        if (n_dim > 2) {
+            //
+            // Now we need to take the scale of the dimensions >2 into account:
+            //
+            for (unsigned i = 2; i < n_dim; i++) // un-scale the direction vector, no longer normalized
+                dir[i] /= e_params[1 + 2*n_dim + (i - 2)];
+                
+            d_e *= sqrt(vect_scalar_product(dir, dir, n_dim));  // correct distance
+            vect_normalize(dir, n_dim);         // re-normalize dir (the direction may have changed a bit)
+        }
+        
+        double d_c = clip_to_unity(x_start, dir, n_dim);
+        assert(d_c > 0.0);                      // x_start ought to be within the legal parameter space
+        
+        double probe_pnt[n_dim];                // The point to be probed
+
+        if (d_c < d_e) {
+            //
+            // The ellipsoid extends beyond the unity cube that limits the available design parameter
+            // space. There are now 3 choices for what to do in this case:
+            // 1. Ignore this direction and proceed with another direction
+            // 2. Probe the intersection point with the unity cube via simulation and use the result.
+            // 3. Declare the intersection point a fail (skip simulation) on the ground that it is undesirable
+            //    to encourage the ellipsoid to extend beyond the space allowed by the desiger. This
+            //    argument was used in the ray search to squash pass points on rays when they hit 
+            //    the design space limits.
+            //
+            // Option *3* is implemented here:
+            //
+            for (unsigned j = 0; j < n_dim; j++)
+                probe_pnt[j] = x_start[j] + d_c * dir[j];
+            unsigned ind = exp_pnts->add_pnt(probe_pnt);
+            exp_pnts->meta(ind) |= bef_pnt_synth;
+
+        } else {
+            //
+            // Evaluate the point on the ellipsoid shell:
+            //
+            for (unsigned j = 0; j < n_dim; j++)
+                probe_pnt[j] = x_start[j] + d_e * dir[j];
+            eval_pnt(probe_pnt);
+        }
+    }
+}
+
 
 void bin_ellipsoid_fit::estimate_initial_e_params()
     //

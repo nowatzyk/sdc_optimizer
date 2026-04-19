@@ -15,7 +15,7 @@ const double min_focal_sum = 0.01;      // minimal focal_sum of the ellipsoid
 
 const double min_a = 0.001;             // The shape factor of the sigmoid function shall not 
 // go negative or near 0: the gradient would vanish and LM is lost
-const double max_a = 50.0;              // The transition becomes too sharp, no more gradient
+const double max_a = 100.0;             // The transition becomes too sharp, no more gradient
                                         // LM gets stuck on a solution can cannot converge anymore
 
 const double min_foci_d = 0.01;         // If the foci merge, their parameters loose independence and
@@ -394,6 +394,75 @@ void vect_normalize(double *vect, unsigned n_dim)
     for (unsigned i = 0; i < n_dim; i++)
         vect[i] *= sqs;    
 }
+
+double rnd_normal()
+//
+// Produces random numbers with gaussian distribution via Box-Mueller transform
+//
+{
+    static unsigned valid = 0;
+    static double rnd1;
+    
+    if (valid == 1) {
+        valid = 0;
+        return rnd1;
+    }
+    
+    double s, c;
+    sincos(2.0 * M_PI * rnd_01d(), &s, &c);
+    
+    double t;
+    do {
+        t = -2.0 * log(rnd_01d());
+        t = sqrt(t);
+    } while (isnan(t) || !isfinite(t));         // Just to be not annoyed by corner cases
+    
+    valid = 1;
+    rnd1 = s * t;
+    return c * t;
+}
+
+void generate_random_dir(double *dir, unsigned n_dim)
+//
+// Populated <dir> with a random direction, normalized to 1
+//
+{
+    for (unsigned i = 0; i < n_dim; i++)
+        dir[i] = rnd_normal();
+    vect_normalize(dir, n_dim);
+}
+
+double clip_to_unity(double *pnt, double *dir, unsigned n_dim)
+//
+// Given a point <pnt> inside the unity <n_dim> dimensional hypercube (all coordinates in [0,1]) and
+// a normalized direction vector <dir>, return the distance from <pnt> along the direction <dir> to a
+// point on the surface of the unity cube.
+//
+// Returns -1, if the point is outside the unity cube, or <dir> has issues
+//
+{
+    double d = __DBL_MAX__;
+    
+    for (unsigned i = 0; i < n_dim; i++) {
+        double d_min = -pnt[i];
+        double d_max = 1.0 - pnt[i];
+        // d*dir[i] must be in [d_min,d_max]
+        
+        if ((d_min > 0.0) || (d_max < 0.0))
+            return -1.0;                // Point isn't in the unity cube
+            
+        if ((d * dir[i]) > d_max)
+             d = d_max / dir[i];
+        if ((d * dir[i]) < d_min)
+             d = d_min / dir[i];        
+    }
+    
+    if (d > M_SQRT2)                    // Can't happen when |dir| = 1
+        return -1.0;
+    
+    return d;
+}
+
 
 int ellipsoid_intersect (
     const double *param,                // Defines the ellipsoid (see above)
