@@ -34,6 +34,7 @@ const uint64_t  bef_pnt_squashed = 0x0004ull;   // This was a pass, but was turn
                                                 // is a way to discared non-convex points
 const uint64_t  bef_pnt_outlier  = 0x0008ull;   // This point was a pss, but is considered to be an outlier
                                                 // because it is too far from the consensus ellipsoid
+const uint64_t  bef_convexified  = 0x0010ull;   // Filtered out via the convexify heuristic
 
 class explored_points {
     unsigned        n_dim;                      // # of dimensions (= #of FP numbers for coordinate)
@@ -96,6 +97,7 @@ class bin_ellipsoid_fit {
     int                 solve();                // perform one iteration of the LSQ fit 
     void                reject_outliers();      // Filter out outliers
     void                e_shell_search(unsigned n); // explore points on the ellipsoid shell
+    void                hp_filter();            // Hyper-plane convexifier
     
     unsigned            n_iterations;           // #of LM-fitting steps to be performed
     unsigned            n_rays;                 // #of extra rays to cast
@@ -115,7 +117,7 @@ public:
                        vector<const_parameter*> &opt_params,  // the parameters that need to optimized
                        parameter *of_ptr,       // pointer to the objective function
                        FILE *sum_fp,            // Passed on to the loop complex to log the smulation outputs
-                       unsigned n_iter = 3,     // #of relocations of the ellipsoid / lsq fitting steps
+                       unsigned n_iter = 4,     // #of relocations of the ellipsoid / lsq fitting steps
                        unsigned n_ray_mul = 3,  // multiply the #of parameter by this number to get the 
                                                 // number of extra (beyond 2 per axis) rays to cast
                        unsigned n_can = 32,     // #of randomly choosen candidates from which to choose

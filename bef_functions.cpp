@@ -388,7 +388,16 @@ void vect_normalize(double *vect, unsigned n_dim)
     for (unsigned i = 0; i < n_dim; i++)
         sqs += vect[i]*vect[i];
     
-    assert(sqs > 1e-20);
+    if (sqs < 1e-20) {
+        //
+        // vect is too short to normalize. Could throw an execption, fail an assertion
+        // In order to be a bit more robust, a random direction vector is returned
+        //
+        fprintf(stderr, "vect_normalize: called on near 0 vector\n");
+        generate_random_dir(vect, n_dim);
+        return;
+    }
+    
     sqs = 1.0 / sqrt(sqs);
     
     for (unsigned i = 0; i < n_dim; i++)

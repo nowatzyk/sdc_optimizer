@@ -39,6 +39,15 @@ const unsigned n_lm_iteration = 150;            // #of of iteration for the LM s
                                                 // undesirable consequences (lacks gradient to center the
                                                 // ellipsoid)
                                                 
+//#define _HP_FILTER_ELLIPSOID_NORMAL_            // If defined, the de-convexification process computes
+                                                // the angle bisector to the two lines connecting the foci
+                                                // to the fail point. If no defined, the normal is the line
+                                                // connecting the fail point to the center of the ellipsoid.
+                                                // I would have guessed that using the ellipsoid normal 
+                                                // would work better becaue it is more like a tangential
+                                                // hyperplane. However, in the D2 latch test case, it is
+                                                // clearly worse.
+                                                
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //  The points being expored are kept in an array to be replayed to the non-linear least square fit 
@@ -134,6 +143,8 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
             //explore(x_start);
             e_shell_search(200);  // <a> should be faily large!
             reject_outliers();
+            if (i > 1)
+            hp_filter();
         }
         solve();
     }
@@ -145,15 +156,16 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
         fprintf(of, "#");                           // Mark header line as gnuplot comment
         for (unsigned i = 0; i < n_dim; i++)
             fprintf (of, " (%u):%s", i + 1, opt_params[i]->get_name());
-        fprintf(of, " (%u):value (%u):fit_val (%u):outlier (%u):synt_pnt (%u):squashed\n",
-                      n_dim+1,   n_dim+2,     n_dim+3,     n_dim+4,      n_dim+5);
+        fprintf(of, " (%u):value (%u):fit_val (%u):outlier (%u):synt_pnt (%u):squashed (%u):convexified\n",
+                      n_dim+1,   n_dim+2,     n_dim+3,     n_dim+4,      n_dim+5,       n_dim+6            );
         for(unsigned i = 0; i < exp_pnts->size(); i++) {
             for (unsigned j = 0; j < n_dim; j++)
                 fprintf(of, "%.5lg ", opt_params[j]->map_01_to_parm(exp_pnts->value(i)[j]));
 
-            fprintf(of, "%u %.5lg %u %u %u\n", (exp_pnts->meta(i) & bef_pnt_value) != 0ull,
+            fprintf(of, "%u %.5lg %u %u %u %u\n", (exp_pnts->meta(i) & bef_pnt_value) != 0ull,
                     e_fit->eval(exp_pnts->value(i)), (exp_pnts->meta(i) & bef_pnt_outlier) != 0ull,
-                    (exp_pnts->meta(i) & bef_pnt_synth) != 0ull, (exp_pnts->meta(i) & bef_pnt_squashed) != 0ull);
+                    (exp_pnts->meta(i) & bef_pnt_synth) != 0ull, (exp_pnts->meta(i) & bef_pnt_squashed) != 0ull,
+                    (exp_pnts->meta(i) & bef_convexified) != 0ull);
         }
         fclose(of);
     }
@@ -632,6 +644,68 @@ void bin_ellipsoid_fit::estimate_initial_e_params()
     *ep_ptr = 1.0;                              // Initial fuzziess
 }
 
+void bin_ellipsoid_fit::hp_filter()
+    //
+    // This filter looks for failed interior points that and excludes all points that are outside
+    // of a hyper plane that is defined by the failed point that is perpendicular to the angular
+    // bisector of the two lines connecting the point to the foci of the current ellipsoid.
+    //
+    // Pre-requisite: there needs to be a valid ellipsoid fit
+    //
+{
+    double *f0 = e_params + 1;                  // focal point 0
+    double *f1 = f0 + n_dim;                    // focal point 1
+    
+    for (unsigned i = 0; i < exp_pnts->size(); i++)
+        exp_pnts->meta(i) &= ~bef_convexified;  // clear flags from previous round
+        
+    for (unsigned i = 0; i < exp_pnts->size(); i++) {
+        if (exp_pnts->meta(i) & (bef_pnt_value | bef_convexified | bef_pnt_synth | bef_pnt_squashed))
+            continue;                           // skip passing, convexified, synthetic or squashed points
+        
+        double *pnt = exp_pnts->value(i);
+        double normal[n_dim];
+#ifdef _HP_FILTER_ELLIPSOID_NORMAL_
+        double dir0[n_dim], dir1[n_dim];        // direction vectors from foci to point
+        for (unsigned j = 0; j < n_dim; j++)  {
+            dir0[j] = pnt[j] - f0[j];
+            dir1[j] = pnt[j] - f1[j];
+        }
+        vect_normalize(dir0, n_dim);
+        vect_normalize(dir1, n_dim);
+
+        for (unsigned j = 0; j < n_dim; j++) 
+            normal[j] = dir0[j] + dir1[j];      // normal is the angular bisector, albite not normalized to 1
+#else
+        for (unsigned j = 0; j < n_dim; j++)
+            normal[j] = pnt[j] - (f0[j] + f1[j]) * 0.5;
+#endif
+        double nl_sq = vect_scalar_product(normal, normal, n_dim);
+        if (nl_sq < 0.01)
+            continue;                           // point is too close to the major axis: skip to avoid trouble
+
+        
+        for (unsigned j = 0; j < exp_pnts->size(); j++) {
+            if ((exp_pnts->meta(j) & bef_pnt_value) == 0ull)
+                continue;                       // skip failed points
+            if (exp_pnts->meta(j) & (bef_convexified | bef_pnt_synth | bef_pnt_squashed))
+                continue;                       // skip ...
+            if (i == j)
+                continue;                       // don't bother with self
+                
+            //
+            // This is an n^2 process, but this is still small potatos compared to running a josim simulation.
+            //
+            double dir[n_dim];
+            for (unsigned k = 0; k < n_dim; k++)
+                dir[k] = exp_pnts->value(j)[k] - pnt[k];   // dir0 = direction from pnt to candidate
+                
+            if (vect_scalar_product(dir, normal, n_dim) > 0.0)
+                exp_pnts->meta(j) |= bef_convexified;       // is on the far side of the hyper plane
+        }
+    }
+}
+
 int bin_ellipsoid_fit::solve()
     //
     // This performs one LSQ fit of the n-dimensional ellipsoid using the data collected so far.
@@ -664,7 +738,7 @@ int bin_ellipsoid_fit::solve()
                 continue;                       // skip outliers
 
             double f = 0.0;
-            if ((exp_pnts->meta(j) & bef_pnt_value) != 0ull)
+            if (((exp_pnts->meta(j) & bef_pnt_value) != 0ull) && ((exp_pnts->meta(j) & bef_convexified) == 0ull))
                 f = 1.0;
             ec = e_fit->add_datum(exp_pnts->value(j), f);
             assert(ec == 0);                    // adding data failing is a sign of a bug
