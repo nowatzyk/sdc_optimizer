@@ -5,13 +5,13 @@
 #include "binary_ellipsoid_fit.h"
 
 //
-// Contraints that are ment to prevent the ellipsoid from degenerating:
+// Contraints that are meant to prevent the ellipsoid from degenerating:
 //
 const double min_focal_sum = 0.01;      // minimal focal_sum of the ellipsoid
-// Note: focal_sum is defined as the sum of the distances
-// to the two foci. This is twice of the radius of a sphere,
-// if you think of a sphere as a degenerated ellipsoid
-//  with 0 excentricity.
+                                        // Note: focal_sum is defined as the sum of the distances
+                                        // to the two foci. This is twice of the radius of a sphere,
+                                        // if you think of a sphere as a degenerated ellipsoid
+                                        //  with 0 excentricity.
 
 const double min_a = 0.001;             // The shape factor of the sigmoid function shall not 
 // go negative or near 0: the gradient would vanish and LM is lost
@@ -19,13 +19,17 @@ const double max_a = 100.0;             // The transition becomes too sharp, no 
                                         // LM gets stuck on a solution can cannot converge anymore
 
 const double min_foci_d = 0.01;         // If the foci merge, their parameters loose independence and
-// mayhem would ensure
+                                        // mayhem would ensure
 
 const double GC_EPS = 1.0e-12;          // in gardiate correction this is a guard against a singularity
-// that can happen when the point falls onto a focal point
+                                        // that can happen when the point falls onto a focal point
 
 const double gcs_min_scale = 0.1;       // The gc scale factor lower limit
 const double gcs_max_scale = 10.0;      // The gc scale factor upper limit
+
+//#define _POK_ELLIPSOID_CENTER_ONLY_     // When defined, the ellipsoid foci may wander out of the
+                                        // parameter space as long as the ellipsoid cent remains inside.
+                                        // This does not seem to be a good idea
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -117,6 +121,22 @@ double n_dim_ellipsoid_gcs(const double *pnt, const double *param, int n_dimensi
     gc = sqrt(gc);                          // gc = ||U0 + U1||
     
     return 1.0 / (1.0 + exp(-a * dr / gc));
+}
+
+static double private_a;
+void set_private_a(double a)
+{
+    private_a = a;
+}
+
+double n_dim_ellipsoid_gcs_sa(const double *pnt, const double *param, int n_dimensions)
+{
+    unsigned n = 2 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0);
+    double param_pa[n];
+    for(unsigned i = 0; i < (n - 1); i++)
+        param_pa[i] = param[i];
+    param_pa[n - 1] = private_a;
+    return n_dim_ellipsoid_gcs(pnt, param_pa, n_dimensions);
 }
 
 //
@@ -273,6 +293,21 @@ void diff_n_dim_ellipsoid_gcs(double *diff, const double *pnt, const double *par
     }
 }
 
+void diff_n_dim_ellipsoid_gcs_sa(double *diff, const double *pnt, const double *param, int n_dimensions)
+{
+    unsigned n = 2 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0);
+    double param_pa[n];
+    for(unsigned i = 0; i < (n - 1); i++)
+        param_pa[i] = param[i];
+    param_pa[n - 1] = private_a;
+    
+    double diff_pa[n];
+    diff_n_dim_ellipsoid_gcs(diff_pa, pnt, param_pa, n_dimensions);
+    
+    for (unsigned i = 0; i < (n - 1); i++)
+        diff[i] = diff_pa[i];
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Associated functions
@@ -283,24 +318,35 @@ int bef_param_ok (double *param, int n_dimensions)
 // Parameter check function to provide some guard rails against LM missbehaving
 //
 {
-    if (param[0] < min_focal_sum) return 0; // Focal sum too small
-    
     double a = param[1 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0)];
     if (a < min_a) return 0;                // sigmoid shape must remain positive (or mayhem ensures)
     
     if (a > max_a) return 0;                // shape is too sharp (LM can wander off in this direction
+    
+    return bef_param_ok_sa(param, n_dimensions);
+}
+
+int bef_param_ok_sa (double *param, int n_dimensions)
+//
+// Parameter check function to provide some guard rails against LM missbehaving
+//
+{
+    if (param[0] < min_focal_sum) return 0; // Focal sum too small
 
     double fd = 0.0;
     for (unsigned i = 0; i < n_dimensions; i++) {
         double t0 = param[1 + i];
         double t1 = param[1 + n_dimensions + i];
-        
+#ifdef _POK_ELLIPSOID_CENTER_ONLY_
         double t = (t0 + t1) * 0.5;         // Center of ellipsoid coordinate
         if ((t < 0.0) || (1.0 < t))
             return 0;                       // Must be within [0,1]
-
-        t = t0 - t1;
-        fd += t * t;
+#else
+        if ((t0 < 0.0) || (1.0 < t0) || (t1 < 0.0) || (1.0 < t1))
+            return 0;                       // Must be within [0,1]        
+#endif
+        t0 -= t1;
+        fd += t0 * t0;
     }
     
     if (fd < (min_foci_d * min_foci_d))
@@ -324,7 +370,11 @@ double (*bef_function_ptr[1])(const double *x, const double *pa, int ip) =
 void   (*bef_diff_function_ptr[1])(double *d, const double *x, const double *pa, int ip) =
     {diff_n_dim_ellipsoid_gcs};
     
-
+double (*bef_function_ptr_sa[1])(const double *x, const double *pa, int ip) =
+    {n_dim_ellipsoid_gcs_sa};
+void   (*bef_diff_function_ptr_sa[1])(double *d, const double *x, const double *pa, int ip) =
+    {diff_n_dim_ellipsoid_gcs_sa};
+    
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Debugging aid
@@ -347,6 +397,7 @@ void nl_check_nde(unsigned n_dim)
         
     double *param = new double[2 + 2*n_dim + ((n_dim > 2) ? n_dim - 2 : 0)];
     param[0] = 0.8123;                  // focal_sum > 0 (Note: should be larger than the foci distance)
+    set_private_a(0.7777);
     param[1 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0)] = 0.7777; // shape factor > 0
 
     
@@ -363,9 +414,9 @@ void nl_check_nde(unsigned n_dim)
         for (unsigned i = 0; i < n_scales; i++)
             param[1 + 2*n_dim + i] = 1.5 - ((double) random() / (double) 0x7fffffff); // in [0.5,1.5]
             
-        check_diffs(2 + 2*n_dim + n_scales, n_dim, x, param, n_dim_ellipsoid_gcs, diff_n_dim_ellipsoid_gcs);
+        check_diffs(2 + 2*n_dim + n_scales, n_dim, x, param, n_dim_ellipsoid_gcs_sa, diff_n_dim_ellipsoid_gcs_sa);
     } else
-        check_diffs(2 + 2*n_dim, n_dim, x, param, n_dim_ellipsoid_gcs, diff_n_dim_ellipsoid_gcs);
+        check_diffs(2 + 2*n_dim, n_dim, x, param, n_dim_ellipsoid_gcs_sa, diff_n_dim_ellipsoid_gcs_sa);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -441,7 +492,7 @@ void generate_random_dir(double *dir, unsigned n_dim)
     vect_normalize(dir, n_dim);
 }
 
-double clip_to_unity(double *pnt, double *dir, unsigned n_dim)
+double clip_to_unity(const double *pnt, const double *dir, unsigned n_dim)
 //
 // Given a point <pnt> inside the unity <n_dim> dimensional hypercube (all coordinates in [0,1]) and
 // a normalized direction vector <dir>, return the distance from <pnt> along the direction <dir> to a
@@ -450,25 +501,32 @@ double clip_to_unity(double *pnt, double *dir, unsigned n_dim)
 // Returns -1, if the point is outside the unity cube, or <dir> has issues
 //
 {
-    double d = __DBL_MAX__;
-    
-    for (unsigned i = 0; i < n_dim; i++) {
-        double d_min = -pnt[i];
-        double d_max = 1.0 - pnt[i];
-        // d*dir[i] must be in [d_min,d_max]
+    // Validate point is inside unit cube
+    for (unsigned i = 0; i < n_dim; i++)
+        if (pnt[i] < 0.0 || pnt[i] > 1.0)
+            return -1.0;
         
-        if ((d_min > 0.0) || (d_max < 0.0))
-            return -1.0;                // Point isn't in the unity cube
+    double d = __DBL_MAX__;
+        
+    for (unsigned i = 0; i < n_dim; i++) {
+        if (dir[i] == 0.0)
+            continue;                   // no movement in this dimension
+                
+        double d_i;
+        if (dir[i] > 0.0) {
+            if (pnt[i] >= 1.0) continue;// on this wall, ray runs along/away
+            d_i = (1.0 - pnt[i]) / dir[i];
+        } else {
+            if (pnt[i] <= 0.0) continue;// on this wall, ray runs along/away
+            d_i = -pnt[i] / dir[i];     // dir[i] < 0, result > 0
+        }
             
-        if ((d * dir[i]) > d_max)
-             d = d_max / dir[i];
-        if ((d * dir[i]) < d_min)
-             d = d_min / dir[i];        
+        d = min(d, d_i);
     }
-    
-    if (d > M_SQRT2)                    // Can't happen when |dir| = 1
-        return -1.0;
-    
+        
+    if (d == __DBL_MAX__ || d < 0.0)
+        return -1.0;    // degenerate: all dirs zero, or point on cube with ray pointing out
+            
     return d;
 }
 
@@ -519,7 +577,9 @@ int ellipsoid_intersect (
     
     // Now solve for dist
     double t = B*B - 4.0*A*C;
-    if ((t < 0.0) || (fabs(A) < 1.0e-15)) return 1; // No good solution
+    if ((t < 0.0) || (fabs(A) < 1.0e-15))
+        return 1;                       // No good solution
+
     t = sqrt(t);
     double d = (-B + t) / (2.0 * A);
     if (d > 0.0) {                      // There is a solution
@@ -532,4 +592,60 @@ int ellipsoid_intersect (
     }
     
     return 1;
+}
+
+Eigen::MatrixXd completeOrthogonalBasis(const Eigen::VectorXd &e1)
+//
+// Given a unit vector e1 (the major axis direction),
+// returns a matrix whose columns are n-1 orthonormal vectors
+// perpendicular to e1, computed via Modified Gramm-Schmidt (MGS) with column pivoting
+//
+{
+    const int n = e1.size();
+    if (n < 2) throw std::invalid_argument("n must be >= 2");
+    
+    // --- Step 1: Build a pool of n candidate vectors.
+    // Use the n standard basis vectors e_i. At least n-1 of them
+    // are linearly independent of e1 (at most one can be parallel).
+    // We will pick the n-1 best ones via pivoting.
+    std::vector<Eigen::VectorXd> pool;
+    pool.reserve(n);
+    for (int i = 0; i < n; i++) {
+        Eigen::VectorXd ei = Eigen::VectorXd::Zero(n);
+        ei(i) = 1.0;
+        // Project out e1 component immediately
+        ei -= ei.dot(e1) * e1;
+        pool.push_back(ei);
+    }
+    
+    // --- Step 2: MGS with pivoting to extract n-1 orthonormal vectors.
+    Eigen::MatrixXd basis(n, n - 1);
+    
+    for (int k = 0; k < n - 1; k++) {
+        // Pivot: find the vector in the pool with the largest residual norm
+        int pivot = -1;
+        double bestNorm = -1.0;
+        for (int j = k; j < n; j++) {
+            double nm = pool[j].norm();
+            if (nm > bestNorm) {
+                bestNorm = nm;
+                pivot = j;
+            }
+        }
+        
+        if (bestNorm < 1e-10)
+            throw std::runtime_error("Numerical rank deficiency in basis completion");
+        
+        // Swap pivot into position k
+        std::swap(pool[k], pool[pivot]);
+        
+        // Normalize to get the k-th basis vector
+        basis.col(k) = pool[k] / bestNorm;
+        
+        // Project out this direction from all remaining vectors (MGS step)
+        for (int j = k + 1; j < n; j++)
+            pool[j] -= pool[j].dot(basis.col(k)) * basis.col(k);
+    }
+    
+    return basis;  // n x (n-1), columns are orthonormal, all perp to e1
 }

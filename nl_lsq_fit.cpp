@@ -634,15 +634,15 @@ int nl_lsq_fit::solve_1s(double &cur_res, double &new_res)
     double a, b;                            // Compute residual
     double ri = res_incr(t2, a, b);             
     ignore(ri);                             // Supress compiler warning about ri: it is used when the printout
-                                            // below is uncommented. res_incr() chnages <a> and <b>, so this
+                                            // below is uncommented. res_incr() changes <a> and <b>, so this
                                             // is not redundant.
     
-    double x = 1.0;             // Line search parameter
+    double x = 1.0;                         // Line search parameter
 #ifdef _NL_LSQ_FIT_LINE_LSRM
     if (fabs(a) > 1e-20) {
         x = -b / (2.0 * a);
         if (x <= 0.0)
-            x = 1.0;        // Doesn't make sense
+            x = 1.0;                        // Doesn't make sense
         else if (x > _NL_LSQ_FIT_LINE_LSRM)
             x = _NL_LSQ_FIT_LINE_LSRM;      // Let's not get carried away..
     }
@@ -665,7 +665,7 @@ int nl_lsq_fit::solve_1s(double &cur_res, double &new_res)
         for (int i = 0; !(P_ok)(parameters, ipb); i++) {
             if (i > _NL_LSQ_FIT_LINE_RETRY_LIMIT)
                 return -3;
-            x *= 0.5;       // Use shift-cutting
+            x *= 0.5;                       // Use shift-cutting
             sc = 1;
             for (int j = 0; j < n_params; j++)
                 parameters[j] = para_last[j] + t2[j] * x;

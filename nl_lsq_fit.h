@@ -33,7 +33,8 @@ extern "C" {
                                                 // 50 is a good start
 #define _NL_LSQ_FIT_LINE_RETRY_LIMIT 20         // Re-try limit (before giving up), 20 worked OK in some cases
 
-#define _NL_LSQ_FIT_CONV_CRIT 0.0001            // Convergence creteria:
+//#define _NL_LSQ_FIT_CONV_CRIT 0.0001          // Convergence creteria:
+#define _NL_LSQ_FIT_CONV_CRIT 0.001             // 1 in 1000 is good enough for the ellipsoid fit use
                                                 // The solver declares victory once the incremental change <dp>
                                                 // of the parameter vector is less than this value, i.e.
                                                 //     |dp|/|p| < _NL_LSQ_FIT_CONV_CRIT

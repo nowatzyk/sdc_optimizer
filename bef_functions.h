@@ -5,11 +5,23 @@
 #ifndef _BEF_FUNCTIONS_DEF_
 #define _BEF_FUNCTIONS_DEF_
 
+#include <eigen3/Eigen/Dense>
+
+extern const double max_a;                      // sigmoid shape factor upper limit
+                                                // purpose: exposed to allow diagosing LM convergence failures
+
 // nl_lsq_fit expects array of function pointers:
 extern double (*bef_function_ptr[1])(const double *x, const double *pa, int ip);
 extern void   (*bef_diff_function_ptr[1])(double *d, const double *x, const double *pa, int ip);
 
 int bef_param_ok (double *param, int ip);       // parameter acceptance function
+int bef_param_ok_sa (double *param, int ip);    // Dito, but doesn't check <a>
+
+void set_private_a(double a);                   // Sets the sigmoid shape factor for the "*_sa" function set
+
+// same as above, but without sigmoid shape factor
+extern double (*bef_function_ptr_sa[1])(const double *x, const double *pa, int ip);
+extern void   (*bef_diff_function_ptr_sa[1])(double *d, const double *x, const double *pa, int ip);
 
 //
 // Misc.
@@ -28,6 +40,7 @@ int ellipsoid_intersect (
 double vect_scalar_product(const double *va, const double *vb, unsigned n_dim);
 void vect_normalize(double *vect, unsigned n_dim);
 void generate_random_dir(double *dir, unsigned n_dim);
-double clip_to_unity(double *pnt, double *dir, unsigned n_dim);
+double clip_to_unity(const double *pnt, const double *dir, unsigned n_dim);
+Eigen::MatrixXd completeOrthogonalBasis(const Eigen::VectorXd &dir);
 
 #endif

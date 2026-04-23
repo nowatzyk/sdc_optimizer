@@ -125,15 +125,15 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
 
     n_e_params = 2 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0);
     e_params = new double[n_e_params];
+    e_params_bak = new double[n_e_params];
     estimate_initial_e_params();
+    for (unsigned i = 0; i < n_e_params; i++)
+        e_params_bak[i] = e_params[i];          // Keep a copy
     
-#ifndef _BIN_EFIT_EXCLUDE_SIG_SHAPE_    
     e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
                            bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
-#else
-    e_fit = new nl_lsq_fit(n_e_params - 1, n_dim, 1,
-                           bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
-#endif
+    e_fit_sa = new nl_lsq_fit(n_e_params - 1, n_dim, 1,
+                           bef_function_ptr_sa, bef_diff_function_ptr_sa, bef_param_ok_sa, n_dim, 0);
     
     //
     // Now the actual work is done here. It is modular, so it could beacome a separate module...
@@ -141,10 +141,10 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     for (unsigned i = 0; i < n_iterations; i++) {
         if (i > 0) {
             //explore(x_start);
-            e_shell_search(200);  // <a> should be faily large!
+            e_shell_search(300);  // <a> should be faily large!
             reject_outliers();
             if (i > 1)
-            hp_filter();
+                hp_filter();
         }
         solve();
     }
@@ -497,9 +497,13 @@ void bin_ellipsoid_fit::e_shell_search(unsigned n)
         
         double t;
         do {
-            t = rnd_01d();
-        } while ((t <= 0.0) || (t >= 1.0));     // Make sure t is in (0,1) excluding 0 and 1
-        d_e += log(1.0 / t - 1.0) / e_params[n_e_params - 1]; // apply inverse sigmoid function to fuzzy shell
+            do {
+                t = rnd_01d();
+            } while ((t <= 0.0) || (t >= 1.0)); // Make sure t is in (0,1) excluding 0 and 1
+            t = log(1.0 / t - 1.0) / e_params[n_e_params - 1];
+                                                // apply inverse sigmoid function to fuzzy shell
+        } while ((d_e + t ) <= 0.0);            // There is a exponential tail, truncate it!
+        d_e += t;
         
         if (n_dim > 2) {
             //
@@ -711,12 +715,40 @@ int bin_ellipsoid_fit::solve()
     // This performs one LSQ fit of the n-dimensional ellipsoid using the data collected so far.
     // It is required that the nl_lsq_fit subsystem had been set up and was provided with a suitabe
     // initial guess for the ellipsoid parameters. The Levenberg-Marquardt algorithm used is not very
-    // robust and can fail. Initial experimenst so far have not encountered any failures, but those test
-    // were not particulrily exhausting.
+    // robust and can fail. The primary failure modes observed are:
+    //
+    // 1. The sigmoid shape factor <a> increases beyond utility. This is actually sensible from the
+    //    objective of a LSQ fit: the function being fitted is binay and the a large <a> will make the
+    //    approxmination more like a step function. However that is undesirable because it eliminates
+    //    any gradient towards a better fit and can lock in a sub-optimal fit. The P_ok() function
+    //    can jeject such solution, but LM will not change direction and after the lne search retry
+    //    count is exhausted, the LM fit will fail with a -3 return code. Often the solution at that
+    //    point is pretty good, and the fit may resume as if convergence was achieved.
+    //
+    // 2. The ellipsoid is squeezed out of the parameter space: This can happen if the parameter space
+    //    is constrained by external factors, for example JJ sizes smaller than x are not realizable,
+    //    but the circuit would actually work OK (or better) if small JJ's were used. In this case the
+    //    passing region extends beyond the limits of the parameter space. The LM solver then finds
+    //    solutions where one focal point moves out of the p-space. Eventually, the center of the
+    //    ellipsoid can move out of the p-space (= not all mapped parameters are within [0,1]) and
+    //    P_ok() will fail the invalid solution.
+    //
+    //  Recovery strategies:
+    //
+    //  a) for a <a> run-away: if the solution was close to convergence: accept the solution as valid
+    //                         if the solution has not converged, restart the LM fit but exclude <a>
+    //                         from being fitted. instead, gradually increase <a> from 1 to 30.
+    //  b) for ellipsoid escape: restart fit without <a>. However, this doesn't really address the underlying
+    //                         problem. A better mitigation strategy is to add synthetic fail points
+    //                         along the limiting hyperplane in the direction where the opbjective function
+    //                         shows no failures. 
     //
     // returns 0 on success, 1 on failure
     //
 {
+    static unsigned n_solve = 0;    // Just count the solver invocations. Used in warning and error messages
+    n_solve++;
+
     e_params[n_e_params - 1] = 1.0;  // LM tends to make the edge too sharp and paints itself into a corner
   
     int ec = e_fit->init(e_params);
@@ -731,20 +763,24 @@ int bin_ellipsoid_fit::solve()
         exit(1);
     }
     
+    double cur_res, new_res;                // Current and new residuals
     for (unsigned i = 0; i < n_lm_iteration; i++) { // One LM iteration
         
+        //
+        // Add the data points to the fit system:
+        //
         for (unsigned j = 0; j < exp_pnts->size(); j++) {
             if ((exp_pnts->meta(j) & bef_pnt_outlier) != 0ull)
                 continue;                       // skip outliers
 
             double f = 0.0;
-            if (((exp_pnts->meta(j) & bef_pnt_value) != 0ull) && ((exp_pnts->meta(j) & bef_convexified) == 0ull))
+            if (((exp_pnts->meta(j) & bef_pnt_value) != 0ull) &&    // If the value is 1
+                ((exp_pnts->meta(j) & bef_convexified) == 0ull))    // AND this point is not convexified
                 f = 1.0;
             ec = e_fit->add_datum(exp_pnts->value(j), f);
             assert(ec == 0);                    // adding data failing is a sign of a bug
         }
         
-        double cur_res, new_res;                // Current and new residuals
         ec = e_fit->solve_1s(cur_res, new_res);
         e_fit->get_params(e_params);            // retrieve the new ellipsoid parameters
         
@@ -755,41 +791,165 @@ int bin_ellipsoid_fit::solve()
         printf("\n");
 #endif
         
-        if (ec == 1)
+        if (ec != 0)
             break;
-        
-        if (ec == -3) {
-            fprintf(stderr, "LM iteration %d max a issue\n", i);
-            break;
-        }
-        
-        if (ec < 0) {
-            fprintf(stderr, "LM iteration %d failed: ec=%d\n", i, ec);
-            return 1;
-        }
-#ifdef _BIN_EFIT_EXCLUDE_SIG_SHAPE_
-        e_params[n_e_params - 1] = 1.0 + fmin(30.0, 0.5 * (double) i));
-#endif
     }
+    
+    if (ec >= 0) {
+        //
+        // The LM has converged (ec == 1) or the number of LM iterations is exhausted (ec == 0), in
+        // which case the solution is likely OK.
+        //
+        if (ec == 0)
+            fprintf(stderr, "Solve %u: #of LM iterations exhausted. current/new residuals= %.6lg/%.6lg\n",
+                    n_solve, cur_res, new_res);
 
-    for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
+        for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
+            x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+        
+        for (unsigned i = 0; i < n_e_params; i++)
+            e_params_bak[i] = e_params[i];
+        
+#ifdef _BIN_EFIT_DEBUG_
+        //
+        // Print all hyper eillipsoids
+        //
+        for (unsigned i = 0; i < (n_dim - 1); i++)
+            for (unsigned j = i + 1; j < n_dim; j++) {
+                char buf[128];
+                sprintf(buf, "bef_ellipsoid_s%u_%u_%u.dat", n_solve, i, j);
+                bin_ellipsoid_fit::print_elliosoid(buf, i, j);
+            }
+#endif
+        return 0;
+    }
+    
+    if ((ec == -3) &&                                   // Failed due to P_ok() inervention
+        (e_params[n_e_params - 1] >= (max_a - 1.0)) &&  // AND caused by the sigmoid shape factor ran away
+        (new_res <= cur_res) &&                         // AND progress was being made (aka not recovery)
+        ((cur_res - new_res) < 0.1) ) {                 // AND the expected residual change is pretty low
+        //
+        // Then this solution is good enough!
+        //
+        fprintf(stderr, "Solve %u: OK solution (<a> run-away recovery). current/new residuals= %.6lg/%.6lg\n",
+                n_solve, cur_res, new_res);
+        
+        for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
+            x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+        
+        for (unsigned i = 0; i < n_e_params; i++)
+            e_params_bak[i] = e_params[i];
+        
+#ifdef _BIN_EFIT_DEBUG_
+        //
+        // Print all hyper eillipsoids
+        //
+        for (unsigned i = 0; i < (n_dim - 1); i++)
+            for (unsigned j = i + 1; j < n_dim; j++) {
+                char buf[128];
+                sprintf(buf, "bef_ellipsoid_s%u_%u_%u.dat", n_solve, i, j);
+                bin_ellipsoid_fit::print_elliosoid(buf, i, j);
+            }
+#endif
+        return 0;
+    }
+    
+    //
+    // Test if a foci was moved out of parameter space
+    //
+    ec = 0;
+    for (unsigned i = 0; i < n_dim; i++)
+        ec |= (e_params[ 1         + i] < 0.0) || (e_params[ 1         + i] > 1.0) ||
+              (e_params[ 1 + n_dim + i] < 0.0) || (e_params[ 1 + n_dim + i] > 1.0) ;
+    if (ec)
+        build_wall(100);     // If so, try to fix this by adding synthetic fail points
+
+    
+    //
+    // Plan A has failed, now trying recovery.
+    //
+    // Note: this recovery did not yet analyze which failure has happened. Ellipsoid escape need
+    //       code to add a wall of synthetic fail points to address the problem. That is TBD for now.
+    //
+    for (unsigned i = 0; i < n_e_params; i++)
+        e_params[i] = e_params_bak[i];
+    set_private_a(1.0);
+    ec = e_fit_sa->init(e_params);
+    assert(ec == 0);                            // Worked above, must work now again!
+    
+    for (unsigned i = 0; i < n_lm_iteration; i++) { // One LM iteration
+        
+        //
+        // Add the data points to the fit system:
+        //
+        for (unsigned j = 0; j < exp_pnts->size(); j++) {
+            if ((exp_pnts->meta(j) & bef_pnt_outlier) != 0ull)
+                continue;                       // skip outliers
+                
+            double f = 0.0;
+            if (((exp_pnts->meta(j) & bef_pnt_value) != 0ull) &&    // If the value is 1
+                ((exp_pnts->meta(j) & bef_convexified) == 0ull))    // AND this point is not convexified
+            f = 1.0;
+            ec = e_fit_sa->add_datum(exp_pnts->value(j), f);
+            assert(ec == 0);                    // adding data failing is a sign of a bug
+        }
+        
+        ec = e_fit_sa->solve_1s(cur_res, new_res);
+        e_fit_sa->get_params(e_params);         // retrieve the new ellipsoid parameters
+        
+#ifdef _BIN_EFIT_DEBUG_
+        printf("SA %2u : cr= %.6lg  nr=%.6lg ec=%d - ", i,  cur_res, new_res, ec);
+        for (unsigned q = 0; q < (n_e_params - 1); q++)
+            printf(" %.4lg", e_params[q]);
+        printf("\n");
+#endif
+        if (ec != 0)
+            break;
+        
+        set_private_a(1.0 + 30.0 * (double) i / (double) n_lm_iteration);
+    }
+    
+    if (ec >= 0) {
+        //
+        // The LM has converged (ec == 1) or the number of LM iterations is exhausted (ec == 0), in
+        // which case the solution is likely OK.
+        //
+        if (ec == 0)
+            fprintf(stderr, "Solve %u: #of LM iterations exhausted. current/new residuals= %.6lg/%.6lg\n",
+                    n_solve, cur_res, new_res);
+            
+        for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
+            x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+        
+        e_params[n_e_params - 1] = 1.0;
+        for (unsigned i = 0; i < n_e_params; i++)
+            e_params_bak[i] = e_params[i];
+        
+        #ifdef _BIN_EFIT_DEBUG_
+        //
+        // Print all hyper eillipsoids
+        //
+        for (unsigned i = 0; i < (n_dim - 1); i++)
+            for (unsigned j = i + 1; j < n_dim; j++) {
+                char buf[128];
+                sprintf(buf, "bef_ellipsoid_s%u_%u_%u.dat", n_solve, i, j);
+                bin_ellipsoid_fit::print_elliosoid(buf, i, j);
+            }
+            #endif
+            return 0;
+    }
+    
+    //
+    // No luck today, will try anyway
+    //
+    fprintf(stderr, "Solve %u: recovery failed - trying anyway. current/new residuals= %.6lg/%.6lg\n",
+            n_solve, cur_res, new_res);
+    for (unsigned i = 0; i < n_e_params; i++)
+        e_params[i] = e_params_bak[i];      // Go back to the back-up starting point
+    for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
         x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
     
-#ifdef _BIN_EFIT_DEBUG_
-    //
-    // Print all hyper eillipsoids
-    //
-    static unsigned n_solve = 0;
-    for (unsigned i = 0; i < (n_dim - 1); i++)
-        for (unsigned j = i + 1; j < n_dim; j++) {
-            char buf[128];
-            sprintf(buf, "bef_ellipsoid_s%u_%u_%u.dat", n_solve, i, j);
-            bin_ellipsoid_fit::print_elliosoid(buf, i, j);
-        }
-    n_solve++;
-#endif
-
-    return 0;
+    return 1;
 }
 
 struct outlier_rec {
@@ -896,6 +1056,112 @@ void bin_ellipsoid_fit::print_results()
                 opt_params[i]->get_name(), cntr_value, min_value, max_value,
                 -(min_value/cntr_value - 1.0) * 100.0, (max_value/cntr_value - 1.0) * 100.0);
     }
+}
+
+int bin_ellipsoid_fit::build_wall(unsigned n)
+//
+// This function addresses the problem caused by passing region that extends beyond the valid parameter space.
+// It is meant to be called once the LM lsq fit process has pushed one focal point of the ellipsoid
+// outside of the allowable parameter space. This function will then add <n> synthetic fail points along
+// the parameter space boundary to build a wall of fail-points that should push pack the ellipsoid.
+//
+// Prerequisite: <e_params> has a solution where one focal point of the ellipsoid has moved outside of
+//               the parameter space.
+//
+// What is done: The ellipsoid pole is cut off perpendicular to the major axis on the side that escaped
+// the parameter space. The cut produces a "surface" (really a sub-space with one less dimension than that
+// of the ellipsoid) that is populated with <n> points. These points are connected with lines to that other
+// (interior) focal point that are used as directions to shoot rays at the boundary of the parameter space.
+// The ray/parameter-space wall intersection points will then be added as synthetic fail points. Points
+// are distributed to sample the the solid angle of the cut surface as seen from the interior focal point
+// uniformly.
+//
+// Return 0 upon success
+// error returns:
+//    1: No focal point ouside the unity box
+//    2: Both foci outside the unity box
+//    3: Foci too close (distance < 1e-10 to prevent divide by 0 errors)
+//    4: Bad focal sum
+//
+{
+    assert((n > 0) && (n_dim > 1));         // This function doesn't make sense for 1 D
+    
+    //
+    // Step 1: locate which focal point is the interior and which one is the exterior one
+    //
+    double *f0 = e_params + 1;
+    double *f1 = f0 + n_dim;
+    unsigned f0_is_ext = 0, f1_is_ext = 0;
+    for (unsigned i = 0; i < n_dim; i++) {
+        if ((f0[i] < 0.0) || (f0[i] > 1.0)) f0_is_ext = 1;
+        if ((f1[i] < 0.0) || (f1[i] > 1.0)) f1_is_ext = 1;
+    }
+
+    if ((f0_is_ext ^ f1_is_ext) == 0) {
+        if (f0_is_ext) {
+            fprintf(stderr, "build_wall: double escape is not (yet) supported\n");
+            return 2;
+        }
+        return 1;                           // No focal point escaped: nothing to do
+    } else if (f0_is_ext) {
+        f1 = e_params + 1;
+        f0 = f1 + n_dim;
+    }
+    Eigen::Map<const Eigen::VectorXd> f_ext(f1, static_cast<Eigen::Index>(n_dim));
+    Eigen::Map<const Eigen::VectorXd> f_int(f0, static_cast<Eigen::Index>(n_dim));        
+    
+    //
+    // Step 2: compute the direction of the escape and the escape surface subspace
+    //
+    Eigen::VectorXd dir = f_ext - f_int;
+    double d_foci = dir.norm();
+    if (d_foci < 1.0e-10)
+        return 3;
+    dir *= 1.0 / d_foci;                    // Normalize: |dir| = 1
+    Eigen::MatrixXd e_set = completeOrthogonalBasis(dir);  // e_set: escape surface sub-space basis vectors
+    
+    //
+    // Step 3: decide on the radius for the target area
+    //
+    double d_w = clip_to_unity(f_int.data(), dir.data(), n_dim);  // distance from interior focal point to boundary
+    assert((d_w > 0.0) && (d_w < d_foci));  // Must be true because f0 is inside and f1 is ouside the box.
+    double fs = e_params[0];                // = focal sum
+    double fs_sq = fs * fs;
+    double t = fs_sq - d_foci*d_foci  + 2.0*d_foci*d_w;
+    t = t*t - 4.0 * fs_sq * d_w*d_w;
+    if (t < 0.0)
+        return 4;
+    double radius = sqrt(t) / (2.0 * fs);   // Radius of the target circle (in un-scaled coordinates)
+    Eigen::VectorXd cap_center = f_int + d_w * dir;
+    
+    //
+    // Step 4: add synthetic points
+    //
+    for (unsigned i = 0; i < n; i++) {
+        double rd[n_dim - 1];                // A random sample in the target point subspace
+        generate_random_dir(rd, n_dim - 1);
+        Eigen::Map<Eigen::VectorXd> r_dir(rd, static_cast<Eigen::Index>(n_dim - 1));
+        
+        double r = radius * pow(rnd_01d(), 1.0 /((double) (n_dim - 1))); // corrected radial distribution
+        Eigen::VectorXd aim = cap_center + r * (e_set * r_dir); // aim point
+        if (n_dim > 2) {
+            // take care of the scaling for the higher dimensions
+            for (unsigned j = 2; j < n_dim; j++) {
+                double ci = (f0[j] + f1[j]) * 0.5;  // Center point
+                aim[j] = (aim[j] - ci) / e_params[2 + 2*n_dim + (j - 2)] + ci;
+            }
+        }
+        Eigen::VectorXd ray_dir = aim - f_int;  // direction from f-int to aim
+        ray_dir.normalize();
+        d_w = clip_to_unity(f_int.data(), ray_dir.data(), n_dim); // Distance to the boundary point
+        
+        Eigen::VectorXd b_pnt = f_int + d_w*ray_dir;    // This ought to be the point we were looking for
+        
+        unsigned p_ind = exp_pnts->add_pnt(b_pnt.data());
+        exp_pnts->meta(p_ind) |= bef_pnt_synth; // Add a synthetic fail point to buid the wall
+    }
+    
+    return 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

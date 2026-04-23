@@ -13,6 +13,11 @@
 #include <cstring>
 #include <new>
 
+#include <vector>
+#include <cmath>
+#include <numeric>
+#include <algorithm>
+
 extern "C" {                                    // The fit-component functions are plain C-code:
     #include "lsq_fit.h"
 };
@@ -73,8 +78,10 @@ class bin_ellipsoid_fit {
                                                 // needed for using nl_lsq_fit() in external data mode
     
     nl_lsq_fit          *e_fit;                 // the NL lsq fit machinery
+    nl_lsq_fit          *e_fit_sa;              // dito, but without the sigmoid shape factor <a> (sans a)
     unsigned            n_e_params;             // #of parameters for the ellipsoid (a function of n_dim)
     double              *e_params;              // Parameters of the fitted ellipsoid
+    double              *e_params_bak;          // Dito, used in LM failure recovery
     
     EvalCache           *ev_cache;              // Perhaps saves some JoSIM calls (doubtful)
     
@@ -98,6 +105,7 @@ class bin_ellipsoid_fit {
     void                reject_outliers();      // Filter out outliers
     void                e_shell_search(unsigned n); // explore points on the ellipsoid shell
     void                hp_filter();            // Hyper-plane convexifier
+    int                 build_wall(unsigned n); // Adds synthetic points to discurage ellipsoid escape
     
     unsigned            n_iterations;           // #of LM-fitting steps to be performed
     unsigned            n_rays;                 // #of extra rays to cast
@@ -117,7 +125,7 @@ public:
                        vector<const_parameter*> &opt_params,  // the parameters that need to optimized
                        parameter *of_ptr,       // pointer to the objective function
                        FILE *sum_fp,            // Passed on to the loop complex to log the smulation outputs
-                       unsigned n_iter = 4,     // #of relocations of the ellipsoid / lsq fitting steps
+                       unsigned n_iter = 5,     // #of relocations of the ellipsoid / lsq fitting steps
                        unsigned n_ray_mul = 3,  // multiply the #of parameter by this number to get the 
                                                 // number of extra (beyond 2 per axis) rays to cast
                        unsigned n_can = 32,     // #of randomly choosen candidates from which to choose
