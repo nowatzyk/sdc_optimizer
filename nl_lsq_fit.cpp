@@ -215,8 +215,6 @@ void nl_lsq_fit::clear()
     res  = 0.0;
     n_dp = 0;
     
-    n_retry = 0;                            // Reset retry counter
-
     //
     // 2. Switch state
     //
@@ -256,6 +254,7 @@ int nl_lsq_fit::init(const double *pa)
     // 2. Reset the system
     //
     clear();
+    n_retry = 0;                            // Reset retry counter
 
     lam = _NL_LSQ_FIT_INIT_LAM;             // Initial damping factor
     n_iteration = 0;
@@ -608,7 +607,7 @@ int nl_lsq_fit::solve_1s(double &cur_res, double &new_res)
 
         if (res_last < res) {               // Trouble: things got worse
             if (n_retry > _NL_LSQ_FIT_LINE_RETRY_LIMIT)
-                return -1;                  // Retry counter exhauseted
+                return -1;                  // Retry counter exhausted
 
             n_retry++;                      // retrying
             for (int i = 0; i < n_params; i++)
@@ -659,13 +658,17 @@ int nl_lsq_fit::solve_1s(double &cur_res, double &new_res)
         S_dp += t*t;
     }
     ec = ((S_dp / S_p) < (_NL_LSQ_FIT_CONV_CRIT * _NL_LSQ_FIT_CONV_CRIT));
-
+    
+    cur_res = res;
+    new_res = res + (a * x + b) * x;
+    
     int sc = 0;                             // shift-cutting flag
     if (P_ok) {                             // There are constraints on the parameters
         for (int i = 0; !(P_ok)(parameters, ipb); i++) {
             if (i > _NL_LSQ_FIT_LINE_RETRY_LIMIT)
                 return -3;
             x *= 0.5;                       // Use shift-cutting
+            new_res = res + (a * x + b) * x;
             sc = 1;
             for (int j = 0; j < n_params; j++)
                 parameters[j] = para_last[j] + t2[j] * x;
@@ -675,8 +678,6 @@ int nl_lsq_fit::solve_1s(double &cur_res, double &new_res)
     if (!sc)
         lam *= lam_down;                    // Unless things go wrong, reduce lam for next round
 
-    cur_res = res;
-    new_res = res + (a * x + b) * x;
 
     //printf(">> r(n)= %.4e  ri= %.4e  r(n+1)= %.4e a= %.4e  b= %.4e x= %7.2f ->%.4e e= %.4e\n", (double) res, ri, res + ri, a, b, x, new_res, ri - (a + b));
 

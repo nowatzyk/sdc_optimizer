@@ -312,18 +312,28 @@ void diff_n_dim_ellipsoid_gcs_sa(double *diff, const double *pnt, const double *
 //
 // Associated functions
 //
+static unsigned bef_pok_fail_reason = 0;
+unsigned get_bef_param_nOK_reason()
+    {return bef_pok_fail_reason;}
 
 int bef_param_ok (double *param, int n_dimensions)
 //
 // Parameter check function to provide some guard rails against LM missbehaving
 //
 {
+    unsigned nOK = 0;
+
     double a = param[1 + 2*n_dimensions + ((n_dimensions > 2) ? (n_dimensions - 2) : 0)];
-    if (a < min_a) return 0;                // sigmoid shape must remain positive (or mayhem ensures)
+    if (a < min_a)                          // sigmoid shape must remain positive (or mayhem ensures)
+        nOK |= bef_PnOK_min_a;
     
-    if (a > max_a) return 0;                // shape is too sharp (LM can wander off in this direction
+    if (a > max_a)                          // shape is too sharp (LM can wander off in this direction
+        nOK |= bef_PnOK_max_a;
     
-    return bef_param_ok_sa(param, n_dimensions);
+    bef_param_ok_sa(param, n_dimensions);   // check the rest
+    bef_pok_fail_reason |= nOK;             // combine failure codes
+    
+    return bef_pok_fail_reason == 0;        // No failure is good (returns 1)
 }
 
 int bef_param_ok_sa (double *param, int n_dimensions)
@@ -331,6 +341,8 @@ int bef_param_ok_sa (double *param, int n_dimensions)
 // Parameter check function to provide some guard rails against LM missbehaving
 //
 {
+    bef_pok_fail_reason = 0;                // assume no failure
+
     if (param[0] < min_focal_sum) return 0; // Focal sum too small
 
     double fd = 0.0;
@@ -339,27 +351,29 @@ int bef_param_ok_sa (double *param, int n_dimensions)
         double t1 = param[1 + n_dimensions + i];
 #ifdef _POK_ELLIPSOID_CENTER_ONLY_
         double t = (t0 + t1) * 0.5;         // Center of ellipsoid coordinate
-        if ((t < 0.0) || (1.0 < t))
-            return 0;                       // Must be within [0,1]
+        if ((t < 0.0) || (1.0 < t))         // Must be within [0,1]
+            bef_pok_fail_reason |= bef_PnOK_cntr_esc; 
 #else
-        if ((t0 < 0.0) || (1.0 < t0) || (t1 < 0.0) || (1.0 < t1))
-            return 0;                       // Must be within [0,1]        
+        if ((t0 < 0.0) || (1.0 < t0))       // focal point 0 must be in [0,1]
+            bef_pok_fail_reason |= bef_PnOK_f0_esc;
+        if ((t1 < 0.0) || (1.0 < t1))       // focal point 1 must be in [0,1]
+            bef_pok_fail_reason |= bef_PnOK_f1_esc;      
 #endif
         t0 -= t1;
         fd += t0 * t0;
     }
     
-    if (fd < (min_foci_d * min_foci_d))
-        return 0;                           // foci too close
+    if (fd < (min_foci_d * min_foci_d))     // foci too close ?
+        bef_pok_fail_reason |= bef_PnOK_f_merge;
     
     if (n_dimensions > 2) {
         const double *s = param + (1 + 2*n_dimensions);
         for (unsigned i = 0; i < (n_dimensions - 2); i++)
             if ((s[i] < gcs_min_scale) || (s[i] > gcs_max_scale))
-                return 0;                   // scale out of range
+                bef_pok_fail_reason |= bef_PnOK_scale; // scale out of range
     }
     
-    return 1;                               // Parameters are OK
+    return bef_pok_fail_reason == 0;        // No failure is good (returns 1)
 }
 
 //

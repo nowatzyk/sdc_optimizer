@@ -67,6 +67,8 @@ public:
     unsigned add_pnt(double *pnt);              // Adds one point (with all attributes ste to 0
 
     unsigned size() { return n_used; };
+    
+    void print_stat(FILE *fp);                  // Diagnostic tool: print stats
 };
 
 

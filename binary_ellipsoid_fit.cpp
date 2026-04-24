@@ -86,6 +86,38 @@ unsigned explored_points::add_pnt(double *pnt)
     return n_used - 1;                          // Returns the index to the new point
 }
 
+void explored_points::print_stat(FILE *fp)
+//
+// Just a summary of the stored points
+// (Note: needs handcrafting if meta-data is changed)
+//
+{
+    const unsigned n_flags = 5;
+    const char *flag_nemo[] =
+        {"Value", "Synthetic", "Squashed", "Outlier", "Convexified"};
+        
+    unsigned *cnt = new unsigned[1 << n_flags];
+    memset(cnt, 0, sizeof(unsigned) * (1 << n_flags));
+    
+    for (unsigned i = 0; i < n_used; i++)       // Count all flag combinations
+        cnt[meta(i) & ((1 << n_flags) - 1)] += 1;
+    
+    fprintf(fp, " %u explored Points\n", n_used);
+    for(unsigned i = 0; i < n_flags; i++)
+        fprintf(fp, "%*sV%*s%s\n", 2 + 2*i, "", 4 + 2*(n_flags-i), "", flag_nemo[i]);
+    for(unsigned i = 0; i < (1 << n_flags); i++) {
+        if (cnt[i] == 0)
+            continue;
+        fprintf(fp, "  ");
+        for (unsigned j = 0; j < n_flags; j++)
+            fprintf(fp, "%c ", (i & (1 << j)) ? '1' : '.');
+        fprintf(fp, "%u\n", cnt[i]);
+    }
+    
+    delete[] cnt;
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -141,7 +173,7 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     for (unsigned i = 0; i < n_iterations; i++) {
         if (i > 0) {
             //explore(x_start);
-            e_shell_search(300);  // <a> should be faily large!
+            e_shell_search(500);  // <a> should be faily large!
             reject_outliers();
             if (i > 1)
                 hp_filter();
@@ -763,6 +795,10 @@ int bin_ellipsoid_fit::solve()
         exit(1);
     }
     
+#ifdef _BIN_EFIT_DEBUG_
+    exp_pnts->print_stat(stdout);
+#endif
+
     double cur_res, new_res;                // Current and new residuals
     for (unsigned i = 0; i < n_lm_iteration; i++) { // One LM iteration
         
@@ -825,7 +861,8 @@ int bin_ellipsoid_fit::solve()
     }
     
     if ((ec == -3) &&                                   // Failed due to P_ok() inervention
-        (e_params[n_e_params - 1] >= (max_a - 1.0)) &&  // AND caused by the sigmoid shape factor ran away
+        (get_bef_param_nOK_reason() & (bef_PnOK_min_a | bef_PnOK_max_a)) &&
+                                                        // AND caused by the sigmoid shape factor ran away
         (new_res <= cur_res) &&                         // AND progress was being made (aka not recovery)
         ((cur_res - new_res) < 0.1) ) {                 // AND the expected residual change is pretty low
         //
@@ -853,26 +890,40 @@ int bin_ellipsoid_fit::solve()
 #endif
         return 0;
     }
-    
-    //
-    // Test if a foci was moved out of parameter space
-    //
-    ec = 0;
-    for (unsigned i = 0; i < n_dim; i++)
-        ec |= (e_params[ 1         + i] < 0.0) || (e_params[ 1         + i] > 1.0) ||
-              (e_params[ 1 + n_dim + i] < 0.0) || (e_params[ 1 + n_dim + i] > 1.0) ;
-    if (ec)
-        build_wall(100);     // If so, try to fix this by adding synthetic fail points
 
-    
     //
     // Plan A has failed, now trying recovery.
     //
     // Note: this recovery did not yet analyze which failure has happened. Ellipsoid escape need
     //       code to add a wall of synthetic fail points to address the problem. That is TBD for now.
     //
-    for (unsigned i = 0; i < n_e_params; i++)
-        e_params[i] = e_params_bak[i];
+    //
+    // Test if a foci was moved out of parameter space
+    //
+    if (get_bef_param_nOK_reason() & (bef_PnOK_f0_esc | bef_PnOK_f1_esc | bef_PnOK_cntr_esc)) {
+        build_wall(150);     // If so, try to fix this by adding synthetic fail points
+        
+        double *f = nullptr;
+        if (get_bef_param_nOK_reason() & bef_PnOK_f0_esc)
+            f = e_params + 1;
+        else if (get_bef_param_nOK_reason() & bef_PnOK_f1_esc)
+            f = e_params + (1 + n_dim);
+        
+        if (f != nullptr) { // back off towards the center
+            double dir[n_dim];
+            for (unsigned i = 0; i < n_dim; i++)
+                dir[i] = 0.5 - f[i];
+            vect_normalize(dir, n_dim);
+            // Let's move the offending focal point 0.1 unit towards the parameter space center
+            for (unsigned i = 0; i < n_dim; i++)
+                f[i] += 0.1 * dir[i];
+        }
+    } else {
+        // Go back to the last parameter set
+        for (unsigned i = 0; i < n_e_params; i++)
+            e_params[i] = e_params_bak[i];
+    }
+
     set_private_a(1.0);
     ec = e_fit_sa->init(e_params);
     assert(ec == 0);                            // Worked above, must work now again!
@@ -909,10 +960,13 @@ int bin_ellipsoid_fit::solve()
         set_private_a(1.0 + 30.0 * (double) i / (double) n_lm_iteration);
     }
     
-    if (ec >= 0) {
+    if (ec >= -1) {
         //
         // The LM has converged (ec == 1) or the number of LM iterations is exhausted (ec == 0), in
         // which case the solution is likely OK.
+        //
+        // The ec == -1 case (retry limit exhausted) is included here because it means that the LM was stuck
+        // is some local minima, but made some progress. 
         //
         if (ec == 0)
             fprintf(stderr, "Solve %u: #of LM iterations exhausted. current/new residuals= %.6lg/%.6lg\n",
@@ -1173,37 +1227,67 @@ static const unsigned n_ellipsoid_pnts = 100;   // #of points to use when plotti
 
 void  bin_ellipsoid_fit::print_elliosoid(char *fn, unsigned x, unsigned y)
 {
-    assert ((x != y) && (x < n_dim) && (y < n_dim));
+    const unsigned n_slices = 5;                // should be an odd number
+
+    assert ((x != y) && (x < n_dim) && (y < n_dim) && (n_dim >= 2));
     FILE *of = fopen(fn, "w");
     assert(of != nullptr);
     
     double cntr[n_dim];
     double dir[n_dim];
-    for (unsigned i = 0; i < n_dim; i++)  {             // Find center of ellipsoid
+    for (unsigned i = 0; i < n_dim; i++)  {     // Find center of ellipsoid
         cntr[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
         dir[i] = 0.0;
     }
     
-    double t = 0.0;
-    double dt = (2.0 * M_PI) / (double) (n_ellipsoid_pnts - 1);
-    // It is intended that the first and last point overlap so that the line is closed
-    
-    for (unsigned i = 0; i < n_ellipsoid_pnts; i++) {
-        sincos(t, dir + y, dir + x);
-        double dist;
-        int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, dist);
-        assert(ec == 0);
-        for (unsigned j = 0; j < n_dim; j++) {
-            if (j) fprintf(of, " ");
-            if (j < 2)
-                fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]));
-            else
-                fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]
-                                     / e_params[1 + 2*n_dim + (j - 2)]));
+    // Find the lowest dimension that is not x or y
+    int z = -1;                                 // assume that there is no such thing (n_dm == 2)
+    for (int i = 0; i < n_dim; i++)
+        if ((i != x) && (i != y)) {
+            z = i;
+            break;
         }
-        fprintf(of, "\n");
-        t += dt;
+
+    double dz = 0.0;
+    if (z >= 0) {                               // Determine perpendicular range
+        dir[z] = 1.0;
+        double z_min, z_max;
+        int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, z_max, &z_min);
+        assert(ec == 0);
+        dz = (z_max - z_min) / (double) (n_slices + 1);
+        dir[z] = 0.0;
+        cntr[z] -= dz * (double) (n_slices / 2);
     }
+    
+    for (unsigned j = 0; j < ((z >= 0) ? n_slices : 1); j++) {
+        if (j > 0)
+            fprintf(of, "\n");
+        
+        double t = 0.0;
+        double dt = (2.0 * M_PI) / (double) (n_ellipsoid_pnts - 1);
+        // It is intended that the first and last point overlap so that the line is closed
+        
+        for (unsigned i = 0; i < n_ellipsoid_pnts; i++) {
+            sincos(t, dir + y, dir + x);
+            double dist;
+            int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, dist);
+            assert(ec == 0);
+            for (unsigned j = 0; j < n_dim; j++) {
+                if (j) fprintf(of, " ");
+                if (j < 2)
+                    fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]));
+                else
+                    fprintf(of, "%.6lg", opt_params[j]->map_01_to_parm(cntr[j] + dist * dir[j]
+                                        / e_params[1 + 2*n_dim + (j - 2)]));
+            }
+            fprintf(of, "\n");
+            t += dt;
+        }
+        
+        if (z >= 0)
+            cntr[z] += dz;
+    }
+    
     fclose(of);
 }
 
