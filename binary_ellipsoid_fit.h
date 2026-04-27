@@ -103,7 +103,8 @@ class bin_ellipsoid_fit {
     void                ray_search_mode1(double ds, double de, double *pnt, double *dir, unsigned n_probes);
                                                 // recursive probe functions
     void                estimate_initial_e_params(); // Make up an estimate for the fit to start from
-    int                 solve();                // perform one iteration of the LSQ fit 
+    int                 solve();                // Perform the one fit iteration 
+//    void                run_nl_lsq_fit(nl_lsq_fit *nlf_ptr, int &ec, unsigned &err, unsigned &nr, double &res_chng);
     void                reject_outliers();      // Filter out outliers
     void                e_shell_search(unsigned n); // explore points on the ellipsoid shell
     void                hp_filter();            // Hyper-plane convexifier
@@ -119,9 +120,14 @@ class bin_ellipsoid_fit {
                                                 // This needs to be in [0,1]. Say 0.01 for 1%
     void                print_results();        // Output the print_results
 
-    void                print_elliosoid(char *fn, unsigned x, unsigned y);
+    void                print_elliosoid(char *fn, unsigned x, unsigned y);  // a debugging aid
                                                 // Outputs the points of the ellipsoid intersection
                                                 // with the hyperplane defined by the dimensions x and y
+    void                print_e_major_axis(char *fn);   // a debugging aid
+                                                // Outputs a file with the point along the major
+                                                // ellipsoid axis
+    void                print_a_point(FILE *of, const double *pnt, const double *off = nullptr, double d = 0.0);
+
 public:
     bin_ellipsoid_fit (FILE *result_fp,         // where to place the results
                        vector<const_parameter*> &opt_params,  // the parameters that need to optimized

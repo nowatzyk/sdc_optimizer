@@ -28,7 +28,7 @@ extern "C" {
 
 //#define _NL_LSQ_FIT_USE_KAHAN_SUMMATION_      // If defined, use Kahan summation
 #define _NL_LSQ_FIT_INIT_LAM 1000.0             // Initial Levenberg damping parameter
-#define _NL_LSQ_FIT_LINE_LSRM 200.0             // If defined, line search is used and this
+#define _NL_LSQ_FIT_LINE_LSRM 50.0             // If defined, line search is used and this (was 200)
                                                 // constant limits the delta-parameter scale
                                                 // 50 is a good start
 #define _NL_LSQ_FIT_LINE_RETRY_LIMIT 20         // Re-try limit (before giving up), 20 worked OK in some cases

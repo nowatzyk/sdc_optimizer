@@ -20,6 +20,9 @@ const double max_a = 100.0;             // The transition becomes too sharp, no 
 
 const double min_foci_d = 0.01;         // If the foci merge, their parameters loose independence and
                                         // mayhem would ensure
+                                        
+const double min_fs_excess = 0.1;       // The focal sum must be at least this fraction larger than the
+                                        // the distance beween the foci (0.1 = 10%)
 
 const double GC_EPS = 1.0e-12;          // in gardiate correction this is a guard against a singularity
                                         // that can happen when the point falls onto a focal point
@@ -27,7 +30,7 @@ const double GC_EPS = 1.0e-12;          // in gardiate correction this is a guar
 const double gcs_min_scale = 0.1;       // The gc scale factor lower limit
 const double gcs_max_scale = 10.0;      // The gc scale factor upper limit
 
-#define _POK_ELLIPSOID_CENTER_ONLY_     // When defined, the ellipsoid foci may wander out of the
+//#define _POK_ELLIPSOID_CENTER_ONLY_     // When defined, the ellipsoid foci may wander out of the
                                         // parameter space as long as the ellipsoid center remains inside.
                                         // This does not seem to be a good idea
                                         // Revise after D2_latch in 5D: It is *much* better. Turns
@@ -346,7 +349,8 @@ int bef_param_ok_sa (double *param, int n_dimensions)
 {
     bef_pok_fail_reason = 0;                // assume no failure
 
-    if (param[0] < min_focal_sum) return 0; // Focal sum too small
+    if (param[0] < min_focal_sum)
+        bef_pok_fail_reason |= bef_PnOK_fs2small; // Focal sum too small
 
     double fd = 0.0;
     for (unsigned i = 0; i < n_dimensions; i++) {
@@ -366,8 +370,12 @@ int bef_param_ok_sa (double *param, int n_dimensions)
         fd += t0 * t0;
     }
     
-    if (fd < (min_foci_d * min_foci_d))     // foci too close ?
+    fd = sqrt(fd);
+    if (fd < min_foci_d)                    // foci too close ?
         bef_pok_fail_reason |= bef_PnOK_f_merge;
+    
+    if ((fd * (1.0 + min_fs_excess)) > param[0])
+        bef_pok_fail_reason |= bef_PnOK_fs2small; // Focal sum too small
     
     if (n_dimensions > 2) {
         const double *s = param + (1 + 2*n_dimensions);
@@ -594,9 +602,12 @@ int ellipsoid_intersect (
     
     // Now solve for dist
     double t = B*B - 4.0*A*C;
-    if ((t < 0.0) || (fabs(A) < 1.0e-15))
+    if ((t < 0.0) || (fabs(A) < 1.0e-15)) {
+        delete[] a;
+        delete[] b;
         return 1;                       // No good solution
-
+    }
+    
     t = sqrt(t);
     double d = (-B + t) / (2.0 * A);
     if (d > 0.0) {                      // There is a solution
@@ -605,44 +616,42 @@ int ellipsoid_intersect (
             d = (-B - t) /  (2.0 * A);  // Second solution is for the other direction
             *dist_n = d;
         }
+        delete[] a;
+        delete[] b;
         return 0;
     }
     
+    delete[] a;
+    delete[] b;
     return 1;
 }
 
 Eigen::MatrixXd completeOrthogonalBasis(const Eigen::VectorXd &e1)
 //
 // Given a unit vector e1 (the major axis direction),
-// returns a matrix whose columns are n-1 orthonormal vectors
-// perpendicular to e1, computed via Modified Gramm-Schmidt (MGS) with column pivoting
+// returns an n x (n-1) matrix whose columns are orthonormal vectors
+// perpendicular to e1, computed via Modified Gram-Schmidt with column pivoting.
 //
 {
     const int n = e1.size();
     if (n < 2) throw std::invalid_argument("n must be >= 2");
     
-    // --- Step 1: Build a pool of n candidate vectors.
-    // Use the n standard basis vectors e_i. At least n-1 of them
-    // are linearly independent of e1 (at most one can be parallel).
-    // We will pick the n-1 best ones via pivoting.
-    std::vector<Eigen::VectorXd> pool;
-    pool.reserve(n);
+    // Step 1: Build pool of n standard basis vectors, with e1 component removed.
+    // They span the (n-1)-dimensional subspace perpendicular to e1.
+    std::vector<Eigen::VectorXd> pool(n, Eigen::VectorXd::Zero(n));
     for (int i = 0; i < n; i++) {
-        Eigen::VectorXd ei = Eigen::VectorXd::Zero(n);
-        ei(i) = 1.0;
-        // Project out e1 component immediately
-        ei -= ei.dot(e1) * e1;
-        pool.push_back(ei);
+        pool[i](i) = 1.0;
+        pool[i] -= pool[i].dot(e1) * e1;   // project out e1
     }
     
-    // --- Step 2: MGS with pivoting to extract n-1 orthonormal vectors.
+    // Step 2: MGS with pivoting over the pool, extracting n-1 basis vectors.
     Eigen::MatrixXd basis(n, n - 1);
     
     for (int k = 0; k < n - 1; k++) {
-        // Pivot: find the vector in the pool with the largest residual norm
-        int pivot = -1;
-        double bestNorm = -1.0;
-        for (int j = k; j < n; j++) {
+        // Pivot: find largest-norm vector from position k onward
+        int pivot = k;
+        double bestNorm = pool[k].norm();
+        for (int j = k + 1; j < n; j++) {
             double nm = pool[j].norm();
             if (nm > bestNorm) {
                 bestNorm = nm;
@@ -653,16 +662,23 @@ Eigen::MatrixXd completeOrthogonalBasis(const Eigen::VectorXd &e1)
         if (bestNorm < 1e-10)
             throw std::runtime_error("Numerical rank deficiency in basis completion");
         
-        // Swap pivot into position k
         std::swap(pool[k], pool[pivot]);
         
-        // Normalize to get the k-th basis vector
+        // Normalize pivot vector to get k-th basis vector
         basis.col(k) = pool[k] / bestNorm;
         
-        // Project out this direction from all remaining vectors (MGS step)
-        for (int j = k + 1; j < n; j++)
+        // Re-enforce perpendicularity to e1 (guards against FP drift)
+        basis.col(k) -= basis.col(k).dot(e1) * e1;
+        basis.col(k).normalize();
+        
+        // MGS: project out basis.col(k) from all remaining pool vectors,
+        // then re-enforce perpendicularity to e1
+        for (int j = k + 1; j < n; j++) {
             pool[j] -= pool[j].dot(basis.col(k)) * basis.col(k);
+            pool[j] -= pool[j].dot(e1) * e1;   // re-enforce perp to e1
+        }
     }
     
-    return basis;  // n x (n-1), columns are orthonormal, all perp to e1
+    return basis;  // columns are orthonormal and perpendicular to e1
 }
+

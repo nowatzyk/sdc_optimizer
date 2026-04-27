@@ -18,6 +18,8 @@ const unsigned  bef_PnOK_f1_esc   = 0x0008;     // focal point 1 out of bound
 const unsigned  bef_PnOK_cntr_esc = 0x0010;     // ellipsoid center out of bounds
 const unsigned  bef_PnOK_f_merge  = 0x0020;     // foci too close
 const unsigned  bef_PnOK_scale    = 0x0040;     // Scale factor out of bounds
+const unsigned  bef_PnOK_fs2small = 0x0080;     // The focal sum is less than min_fs_excess larger
+                                                // than the foci distance
 
 // nl_lsq_fit expects array of function pointers:
 extern double (*bef_function_ptr[1])(const double *x, const double *pa, int ip);
