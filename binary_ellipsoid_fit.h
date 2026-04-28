@@ -106,7 +106,7 @@ class bin_ellipsoid_fit {
     int                 solve();                // Perform the one fit iteration 
 //    void                run_nl_lsq_fit(nl_lsq_fit *nlf_ptr, int &ec, unsigned &err, unsigned &nr, double &res_chng);
     void                reject_outliers();      // Filter out outliers
-    void                e_shell_search(unsigned n); // explore points on the ellipsoid shell
+    void                e_shell_search(unsigned n, double a = 50.0); // explore points on the ellipsoid shell
     void                hp_filter();            // Hyper-plane convexifier
     int                 build_wall(unsigned n); // Adds synthetic points to discurage ellipsoid escape
     
@@ -127,6 +127,8 @@ class bin_ellipsoid_fit {
                                                 // Outputs a file with the point along the major
                                                 // ellipsoid axis
     void                print_a_point(FILE *of, const double *pnt, const double *off = nullptr, double d = 0.0);
+    void                print_a_point_ec(FILE *of, const double *pnt, const double *off = nullptr, double d = 0.0);
+                                                // same, but in ellipsoid coordinates: scalling is applied
 
 public:
     bin_ellipsoid_fit (FILE *result_fp,         // where to place the results

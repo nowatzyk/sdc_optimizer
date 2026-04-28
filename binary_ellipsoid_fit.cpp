@@ -516,9 +516,14 @@ void bin_ellipsoid_fit::ray_search_mode1(double ds, double de, double *pnt, doub
 // by the fit. That is A-Ok, because all of this is a heuristic: there is no perfect way to do this, just
 // inifinitelt many heuristics: the milage varies with the actual shape of the Shmoo plot.
 //
+// Note: the sigmoid shape factor <a> is explicit and not taken from the <e_params> vector. <a> should be 
+//       >= 50 initially and can be increased later when there there is a good fit.
+//
 
-void bin_ellipsoid_fit::e_shell_search(unsigned n)
+void bin_ellipsoid_fit::e_shell_search(unsigned n, double a)
 {
+    assert(a > 0.1);
+    
     for (unsigned i = 0; i < n; i++) {
         double dir[n_dim];
         generate_random_dir(dir, n_dim);
@@ -532,26 +537,24 @@ void bin_ellipsoid_fit::e_shell_search(unsigned n)
             do {
                 t = rnd_01d();
             } while ((t <= 0.0) || (t >= 1.0)); // Make sure t is in (0,1) excluding 0 and 1
-            t = log(1.0 / t - 1.0) / e_params[n_e_params - 1];
-                                                // apply inverse sigmoid function to fuzzy shell
+            t = log(1.0 / t - 1.0) / a;         // apply inverse sigmoid function to fuzzy shell
         } while ((d_e + t ) <= 0.0);            // There is a exponential tail, truncate it!
         d_e += t;
         
-        if (n_dim > 2) {
-            //
-            // Now we need to take the scale of the dimensions >2 into account:
-            //
-            for (unsigned i = 2; i < n_dim; i++) // un-scale the direction vector, no longer normalized
-                dir[i] /= e_params[1 + 2*n_dim + (i - 2)];
-                
-            d_e *= sqrt(vect_scalar_product(dir, dir, n_dim));  // correct distance
-            vect_normalize(dir, n_dim);         // re-normalize dir (the direction may have changed a bit)
+        double probe_pnt[n_dim];                // The point to be probed
+        for (unsigned j = 0; j < n_dim; j++) {
+            if (j <= 1)
+                probe_pnt[j] = x_start[j] + d_e * dir[j];
+            else
+                probe_pnt[j] = x_start[j] + d_e * dir[j] /  e_params[1 + 2*n_dim + (j - 2)];
+            dir[j] =  probe_pnt[j] - x_start[j];
         }
+        d_e = sqrt(vect_scalar_product(dir, dir, n_dim));  // correct distance in scaled coordinates
+        vect_normalize(dir, n_dim);             // re-normalize dir (including effect of scaling)
         
         double d_c = clip_to_unity(x_start, dir, n_dim);
         assert(d_c > 0.0);                      // x_start ought to be within the legal parameter space
         
-        double probe_pnt[n_dim];                // The point to be probed
 
         if (d_c < d_e) {
             //
@@ -977,23 +980,7 @@ int bin_ellipsoid_fit::solve()
         
         set_private_a(1.0 + 30.0 * (double) i / (double) n_lm_iteration);
     }
-    
-#ifdef _BIN_EFIT_DEBUG_
-    //
-    // Print all hyper eillipsoids
-    //
-    {
-        char buf[128];
-        for (unsigned i = 0; i < (n_dim - 1); i++)
-            for (unsigned j = i + 1; j < n_dim; j++) {
-                sprintf(buf, "bef_ellipsoid_sa%u_%u_%u.dat", n_solve, i, j);
-                bin_ellipsoid_fit::print_elliosoid(buf, i, j);
-            }
-        sprintf(buf, "bef_ellipsoid_sa%u_axis.dat", n_solve);
-        print_e_major_axis(buf);
-    }
-#endif
-        
+
     if (ec >= -1) {
         //
         // The LM has converged (ec == 1) or the number of LM iterations is exhausted (ec == 0), in
@@ -1039,6 +1026,22 @@ int bin_ellipsoid_fit::solve()
         e_params[i] = e_params_bak[i];      // Go back to the back-up starting point
     for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
         x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+
+#ifdef _BIN_EFIT_DEBUG_
+    //
+    // Print all hyper eillipsoids
+    //
+    {
+        char buf[128];
+        for (unsigned i = 0; i < (n_dim - 1); i++)
+            for (unsigned j = i + 1; j < n_dim; j++) {
+                sprintf(buf, "bef_ellipsoid_sa%u_%u_%u.dat", n_solve, i, j);
+                bin_ellipsoid_fit::print_elliosoid(buf, i, j);
+            }
+            sprintf(buf, "bef_ellipsoid_sa%u_axis.dat", n_solve);
+        print_e_major_axis(buf);
+    }
+#endif
     
     return 1;
 }
@@ -1296,6 +1299,26 @@ int bin_ellipsoid_fit::build_wall(unsigned n)
 
 static const unsigned n_ellipsoid_pnts = 100;   // #of points to use when plotting an ellipsoid
 
+void  bin_ellipsoid_fit::print_a_point_ec(FILE *of, const double *pnt, const double *off, double d)
+//
+// Print a point with optional offset vector and distance (just debugging infrastructure)
+//
+{
+    double point[n_dim];
+    
+    for (unsigned k = 0; k < n_dim; k++) {
+        double t = pnt[k];
+        if (off != nullptr)
+            t += off[k] * d;
+        if (k >= 2) {
+            double cntr = 0.5 * (e_params[1 + k] + e_params[1 + n_dim + k]);
+            t = (t - cntr) / e_params[1 + 2*n_dim + (k - 2)] + cntr;
+        }
+        point[k] = t;
+    }
+    print_a_point(of, point);
+}
+
 void  bin_ellipsoid_fit::print_a_point(FILE *of, const double *pnt, const double *off, double d)
 //
 // Print a point with optional offset vector and distance (just debugging infrastructure)
@@ -1306,10 +1329,7 @@ void  bin_ellipsoid_fit::print_a_point(FILE *of, const double *pnt, const double
         double t = pnt[k];
         if (off != nullptr)
             t += off[k] * d;
-        if (k < 2)
-            fprintf(of, "%.6lg", opt_params[k]->map_01_to_parm(t));
-        else
-            fprintf(of, "%.6lg", opt_params[k]->map_01_to_parm(t / e_params[1 + 2*n_dim + (k - 2)]));
+        fprintf(of, "%.6lg", opt_params[k]->map_01_to_parm(t));
     }
     fprintf(of, "\n");
 }
@@ -1361,7 +1381,7 @@ void  bin_ellipsoid_fit::print_elliosoid(char *fn, unsigned x, unsigned y)
             double dist;
             int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, dist);
             assert(ec == 0);
-            print_a_point(of, cntr, dir, dist);
+            print_a_point_ec(of, cntr, dir, dist);
             t += dt;
         }
         
@@ -1391,14 +1411,18 @@ void  bin_ellipsoid_fit::print_e_major_axis(char *fn)
     assert(ec == 0);
     
     print_a_point(of, cntr);                        // Point 1: ellisoid center
-    print_a_point(of, e_params + 1);                // Point 2: f0
-    print_a_point(of, cntr, dir, -0.5 * fc_d);      // Point 3: should be the same!
-    print_a_point(of, e_params + 1 + n_dim);        // Point 4: f1
-    print_a_point(of, cntr, dir,  0.5 * fc_d);      // Point 5: should be the same!    
-    print_a_point(of, cntr, dir, d0);               // Point 6: Ellipsoid +pole
-    print_a_point(of, cntr, dir, 0.5* e_params[0]); // Point 7: should be the same
-    print_a_point(of, cntr, dir, d1);               // Point 8: Ellipsoid -pole
-    print_a_point(of, cntr, dir, -0.5*e_params[0]); // Point 9: should be the same
+    print_a_point_ec(of, e_params + 1);                // Point 2: f0
+    print_a_point_ec(of, cntr, dir, -0.5 * fc_d);      // Point 3: should be the same!
+    print_a_point_ec(of, e_params + 1 + n_dim);        // Point 4: f1
+    print_a_point_ec(of, cntr, dir,  0.5 * fc_d);      // Point 5: should be the same!    
+    print_a_point_ec(of, cntr, dir, d0);               // Point 6: Ellipsoid +pole
+    print_a_point_ec(of, cntr, dir, 0.5* e_params[0]); // Point 7: should be the same
+    print_a_point_ec(of, cntr, dir, d1);               // Point 8: Ellipsoid -pole
+    print_a_point_ec(of, cntr, dir, -0.5*e_params[0]); // Point 9: should be the same
+
+    for (unsigned i = 2; i < n_dim; i++)
+        dir[i] /= e_params[1 + 2*n_dim + (i - 2)];
+    vect_normalize(dir, n_dim);
     
     double d_c = clip_to_unity(cntr, dir, n_dim);
     print_a_point(of, cntr, dir, d_c);              // Point 10: Point on p-space boundary
