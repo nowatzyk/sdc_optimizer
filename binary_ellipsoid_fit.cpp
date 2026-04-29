@@ -8,7 +8,7 @@
 
 const unsigned n_lm_iteration = 200;            // Max #of of iteration for the LM solver
 
-const unsigned n_best_solutions = 10;           // Beam search limit: only this number of solutions will
+const unsigned n_best_solutions = 16;           // Beam search limit: only this number of solutions will
                                                 // be persued. If there are more, the worse ones will be
                                                 // discarded.
 
@@ -171,7 +171,7 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     for (unsigned i = 0; i < n_iterations; i++) {
         if (i > 0) {
             //explore(x_start);
-            e_shell_search(300);  // <a> should be faily large!
+            e_shell_search(600);  // <a> should be faily large!
             reject_outliers();
             if (i > 1)
                 hp_filter();
@@ -760,11 +760,12 @@ int solution_key(const void *a, const void *b)
 {
     // Primary key:
     switch ((((lm_solution *) a)->ec >= 0) * 2 + (((lm_solution *) b)->ec >= 0)) {
+/*
         case 1:         // B completed without problem while A failed to do so:
             return 1;   // B should be placed first
         case 2:         // A completed without problem while B failed to do so:
             return -1;  // A should come first
-            
+*/
         default: {      // Undecided (both failed or both succeded)
             double t = (((lm_solution *) a)->end_res) - (((lm_solution *) b)->end_res);
             if (t < 0.0)
@@ -809,7 +810,7 @@ void bin_ellipsoid_fit::derive_solution(lm_solution &sol)
     for (unsigned i = 0; i < n_e_params; i++)
         ps.param_init[i] = sol.param_final[i];
     
-    if (sol.pok_fail != 0) {                    // Did the finalparameter set pass bef_param_ok[_sa]()?
+    if (sol.pok_fail != 0) {                    // Did the final parameter set pass bef_param_ok[_sa]()?
         //
         // NO: initiate recovery
         //
@@ -821,7 +822,7 @@ void bin_ellipsoid_fit::derive_solution(lm_solution &sol)
         ps.ec = sol.ec;
         if (param_recovery(ps) == 0) {
             // Parameter recovery failed
-            fprintf(stderr, "derive_solution: parameter recovery failed - find out why\n");
+            fprintf(stderr, "derive_solution: parameter recovery failed - skipping this set\n");
             
             // give up:
             delete[] ps.param_init;
@@ -843,10 +844,7 @@ unsigned  bin_ellipsoid_fit::param_recovery(lm_solution &sol)
     // Returns 0 on failure and 1 on success
 {
     assert(sol.ec == -3);                       // verify why we are here
-    
-    if (sol.pok_fail & (bef_PnOK_min_a | bef_PnOK_max_a))
-    
-    
+
     for (unsigned i = 0; i < n_e_params; i++)
         e_params[i] = sol.param_init[i];
     for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
@@ -932,6 +930,7 @@ unsigned  bin_ellipsoid_fit::param_recovery(lm_solution &sol)
         
         default:
             // can't handle multiple, failures (which should be unlikely)
+            fprintf(stderr, "param_recovery failed due to multiple, concurrent problems.\n");
             return 0;
     }
     
@@ -982,21 +981,16 @@ int bin_ellipsoid_fit::solve()
     }
     
     unsigned n_data = exp_pnts->size();
+    unsigned n_sol = solutions.size();
     for (unsigned i = 0; i < 3; i++)
         derive_solution(solutions[i]);          // add up to 3 new solutions
-    if (exp_pnts->size() > n_data) {
-        //
-        // Synthetic data points were added to address ellipsoid escapes.
-        // Re-evaluate and re-sort all solutions.
-        //
-#ifdef _BIN_EFIT_DEBUG_
-        exp_pnts->print_stat(stdout);
-#endif
-        for (unsigned i = 0; i < solutions.size(); i++)
-            solve_one(solutions[i]);
-        qsort(solutions.data(), solutions.size(), sizeof(lm_solution), solution_key);    
-    }
+    if (exp_pnts->size() > n_data)              // data points were added
+        n_sol = 0;                              // need to re-do previous solves
 
+    for (unsigned i = n_sol; i < solutions.size(); i++)
+        solve_one(solutions[i]);
+    qsort(solutions.data(), solutions.size(), sizeof(lm_solution), solution_key);
+    
     //
     // Use best solution to go forward:
     //
@@ -1041,10 +1035,6 @@ void bin_ellipsoid_fit::solve_one(lm_solution &sol)
         exit(1);
     }
     
-#ifdef _BIN_EFIT_DEBUG_
-    exp_pnts->print_stat(stdout);
-#endif
-    
     double cur_res, new_res;                    // Current and new (estimated) residuals
     for (unsigned i = 0; i < n_lm_iteration; i++) {
         
@@ -1085,7 +1075,7 @@ void bin_ellipsoid_fit::solve_one(lm_solution &sol)
 #ifdef _BIN_EFIT_DEBUG_
         printf(" %2u : cr= %.6lg  nr=%.6lg ec=%d - ", i,  cur_res, new_res, ec);
         for (unsigned q = 0; q < n_e_params; q++)
-            printf(" %.4lg", e_params[q]);
+            printf(" %.4lg", sol.param_final[q]);
         printf("\n");
 #endif
         
@@ -1110,6 +1100,7 @@ void bin_ellipsoid_fit::solve_one(lm_solution &sol)
     // Print all hyper eillipsoids
     //
     {
+        printf(">>>> ec=%d  PoK=0x%04x\n", sol.ec, sol.pok_fail);
         char buf[128];
         for (unsigned i = 0; i < (n_dim - 1); i++)
             for (unsigned j = i + 1; j < n_dim; j++) {
