@@ -71,6 +71,17 @@ public:
     void print_stat(FILE *fp);                  // Diagnostic tool: print stats
 };
 
+struct lm_solution {                            // Captures one LM LSQ fit result
+    double              begin_res;              // Residual at the start
+    double              end_res;                // Residual at the end
+    unsigned            n_iter;                 // #of LM iterations performed
+    int                 ec;                     // Error condition returned from the last step 
+    unsigned            pok_fail;               // Reason for POK fail (or 0 if successfull)
+    double              *param_init;            // Starting parameter set (POK passes)
+    double              *param_final;           // Parameter set at completeion
+    double              a_init;                 // initial sigmoid shape factor: if > 0.0, then a sans a fit
+    double              a_incr;                 // change of a per iteration
+};
 
 class bin_ellipsoid_fit {
     unsigned            n_dim;                  // #of dimensions/parameters to consider
@@ -83,7 +94,7 @@ class bin_ellipsoid_fit {
     nl_lsq_fit          *e_fit_sa;              // dito, but without the sigmoid shape factor <a> (sans a)
     unsigned            n_e_params;             // #of parameters for the ellipsoid (a function of n_dim)
     double              *e_params;              // Parameters of the fitted ellipsoid
-    double              *e_params_bak;          // Dito, used in LM failure recovery
+    vector<lm_solution> solutions;              // LM solutions
     
     EvalCache           *ev_cache;              // Perhaps saves some JoSIM calls (doubtful)
     
@@ -103,8 +114,12 @@ class bin_ellipsoid_fit {
     void                ray_search_mode1(double ds, double de, double *pnt, double *dir, unsigned n_probes);
                                                 // recursive probe functions
     void                estimate_initial_e_params(); // Make up an estimate for the fit to start from
-    int                 solve();                // Perform the one fit iteration 
-//    void                run_nl_lsq_fit(nl_lsq_fit *nlf_ptr, int &ec, unsigned &err, unsigned &nr, double &res_chng);
+    void                set_up_proto_solution(double ai, double da); // creates a solution entity
+    void                derive_solution(lm_solution &sol); // derives a solution entity
+    unsigned            param_recovery(lm_solution &sol); // Fix failing parameter set
+    int                 solve();                // Perform the one fit iteration
+    void                solve_one(lm_solution &sol); // Perform one LM LSQ fit
+
     void                reject_outliers();      // Filter out outliers
     void                e_shell_search(unsigned n, double a = 50.0); // explore points on the ellipsoid shell
     void                hp_filter();            // Hyper-plane convexifier

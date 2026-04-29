@@ -6,7 +6,12 @@
 
 #include "binary_ellipsoid_fit.h"
 
-const unsigned n_lm_iteration = 150;            // #of of iteration for the LM solver
+const unsigned n_lm_iteration = 200;            // Max #of of iteration for the LM solver
+
+const unsigned n_best_solutions = 10;           // Beam search limit: only this number of solutions will
+                                                // be persued. If there are more, the worse ones will be
+                                                // discarded.
+
 #define _BIN_EFIT_DEBUG_                        // When defined, produce extra debugging info on stdout
 
 //#define _ADD_SYNTHETIC_FAILS_                 // When defined, it implements the idea that a fit is better
@@ -33,12 +38,6 @@ const unsigned n_lm_iteration = 150;            // #of of iteration for the LM s
                                                 // an outlier, the ellipsoid extends over regions where the
                                                 // the simulation failed. This is is not a conservative thing to do
 
-//#define _BIN_EFIT_EXCLUDE_SIG_SHAPE_            // If defined, the sigmoid shape factor is not part of the 
-                                                // LM LSQ-fit procedure. It has a tendency to run away so that
-                                                // the fitted function becoems a setp function, which has
-                                                // undesirable consequences (lacks gradient to center the
-                                                // ellipsoid)
-                                                
 //#define _HP_FILTER_ELLIPSOID_NORMAL_            // If defined, the de-convexification process computes
                                                 // the angle bisector to the two lines connecting the foci
                                                 // to the fail point. If no defined, the normal is the line
@@ -157,10 +156,9 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
 
     n_e_params = 2 + 2*n_dim + ((n_dim > 2) ? (n_dim - 2) : 0);
     e_params = new double[n_e_params];
-    e_params_bak = new double[n_e_params];
-    estimate_initial_e_params();
-    for (unsigned i = 0; i < n_e_params; i++)
-        e_params_bak[i] = e_params[i];          // Keep a copy
+
+    estimate_initial_e_params();                // make up an initial fit parameter estimate
+
     
     e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
                            bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
@@ -178,7 +176,9 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
             if (i > 1)
                 hp_filter();
         }
-        solve();
+        int ec = solve();
+        if (ec < 0)
+            printf("iteration %u completed with ec=%d\n", i + 1, ec);
     }
     print_results();
 #ifdef _BIN_EFIT_DEBUG_
@@ -737,61 +737,304 @@ void bin_ellipsoid_fit::hp_filter()
             //
             double dir[n_dim];
             for (unsigned k = 0; k < n_dim; k++)
-                dir[k] = exp_pnts->value(j)[k] - pnt[k];   // dir0 = direction from pnt to candidate
+                dir[k] = exp_pnts->value(j)[k] - pnt[k];    // dir0 = direction from pnt to candidate
                 
             if (vect_scalar_product(dir, normal, n_dim) > 0.0)
-                exp_pnts->meta(j) |= bef_convexified;       // is on the far side of the hyper plane
+                exp_pnts->meta(j) |= bef_convexified;   // is on the far side of the hyper plane
         }
     }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// The LM fit machinery
+//
+
+int solution_key(const void *a, const void *b)
+    //
+    // Solution sort key:
+    //
+    // 1. Solutions that completed the LM iteration cleanly come first
+    // 2. Slolution with low residuals are better
+    //
+{
+    // Primary key:
+    switch ((((lm_solution *) a)->ec >= 0) * 2 + (((lm_solution *) b)->ec >= 0)) {
+        case 1:         // B completed without problem while A failed to do so:
+            return 1;   // B should be placed first
+        case 2:         // A completed without problem while B failed to do so:
+            return -1;  // A should come first
+            
+        default: {      // Undecided (both failed or both succeded)
+            double t = (((lm_solution *) a)->end_res) - (((lm_solution *) b)->end_res);
+            if (t < 0.0)
+                return -1;  // A's residual is smaller: should come first
+            else if (t > 0.0)
+                return 1;
+            else
+                return 0;   // Unlikely! (if control gets here it is most likely due to a bug)
+        }
+    }
+    return 0;           // not reachable
+}
+
+void bin_ellipsoid_fit::set_up_proto_solution(double ai, double da)
+{
+    lm_solution ps;
+    ps.a_init = ai;
+    ps.a_incr = da;
+    ps.param_init = new double[n_e_params];
+    ps.param_final = new double[n_e_params];
+    for (unsigned i = 0; i < n_e_params; i++)
+        ps.param_init[i] = e_params[i];
+    solutions.push_back(ps);
+}
+
+void bin_ellipsoid_fit::derive_solution(lm_solution &sol)
+    //
+    // <sol> is a result from a LM LSQ fit attempt. This function takes the
+    // end-point of <sol> and makes it the starting point of a new solution.
+    //
+    // Note: LM lsq-fit attempts are not guaranteed to be successful, thus the
+    //       endpoint may *not* pass the bef_param_ok[_sa]() functions. However,
+    //       starting points must pass this function. So fixing the parameter set
+    //       might be required.
+    //
+{
+    lm_solution ps;
+    ps.a_init = sol.a_init;
+    ps.a_incr = sol.a_incr;
+    ps.param_init = new double[n_e_params];
+    ps.param_final = new double[n_e_params];
+    for (unsigned i = 0; i < n_e_params; i++)
+        ps.param_init[i] = sol.param_final[i];
+    
+    if (sol.pok_fail != 0) {                    // Did the finalparameter set pass bef_param_ok[_sa]()?
+        //
+        // NO: initiate recovery
+        //
+        // Note: there are other reasons why the LM LSQ-fit may have failed, but those don't really
+        //       prevent trying again with more data points which may lead to a different outcome.
+        //       The objective here is to create a viable starting point for a fit attempt.
+        //
+        ps.pok_fail = sol.pok_fail;
+        ps.ec = sol.ec;
+        if (param_recovery(ps) == 0) {
+            // Parameter recovery failed
+            fprintf(stderr, "derive_solution: parameter recovery failed - find out why\n");
+            
+            // give up:
+            delete[] ps.param_init;
+            delete[] ps.param_final;
+            return;
+        }
+    }
+    
+    solutions.push_back(ps);
+}
+
+unsigned  bin_ellipsoid_fit::param_recovery(lm_solution &sol)
+    //
+    // <sol> is a solution from a LM LSQ-fit attempt that ultimately failed due to an abort
+    // because of bef_param_ok[_sa]() detecting a bad parameter configuration.
+    // This function implements a number of mitigation strategies to get a better fit.
+    // They may not lead to a perfect fit, but the parameters will pass bef_param_ok[_sa]().
+    //
+    // Returns 0 on failure and 1 on success
+{
+    assert(sol.ec == -3);                       // verify why we are here
+    
+    if (sol.pok_fail & (bef_PnOK_min_a | bef_PnOK_max_a))
+    
+    
+    for (unsigned i = 0; i < n_e_params; i++)
+        e_params[i] = sol.param_init[i];
+    for (unsigned i = 0; i < n_dim; i++)        // relocate x_start to the new ellipsoid center
+        x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+    
+    switch (sol.pok_fail) {
+        
+        case bef_PnOK_min_a:
+        case bef_PnOK_max_a:
+        case (bef_PnOK_min_a | bef_PnOK_max_a):
+            assert(sol.a_init == 0.0);          // shoule happen only is fit all mode
+            sol.param_init[n_e_params-1] = 50.0;// Back off <a>
+            break;                              // That's all 
+            
+        case bef_PnOK_f0_esc:
+        case bef_PnOK_f1_esc: {
+            
+            build_wall(150);                    // add synthetic fail points to discourage ellipsoid
+                                                // drifting towards this p-space boundary
+                                                // Note: this is why x_start/e_params were setup above
+            
+            double *f = nullptr;
+            if ( sol.pok_fail == bef_PnOK_f0_esc)
+                f = sol.param_init + 1;         // aka focal point 0
+            else
+                f = sol.param_init + (1 + n_dim);
+            
+            // back off focal point towards the center
+            double dir[n_dim];
+            for (unsigned i = 0; i < n_dim; i++)
+                dir[i] = 0.5 - f[i];
+            vect_normalize(dir, n_dim);
+            // Let's move the offending focal point 0.1 unit towards the parameter space center
+            for (unsigned i = 0; i < n_dim; i++)
+                f[i] += 0.1 * dir[i];
+
+            break;
+        }
+        
+        case bef_PnOK_cntr_esc: {
+            // This is the case of the ellipsoid center escape. Nudge center towards p-space center
+            double dir[n_dim];
+            for (unsigned i = 0; i < n_dim; i++)
+                dir[i] = 0.5 - 0.5 * (sol.param_init[1 + i] + sol.param_init[1 + n_dim + i]);
+            vect_normalize(dir, n_dim);
+            // Let's move both focal points 0.1 unit towards the parameter space center
+            for (unsigned i = 0; i < n_dim; i++) {
+                sol.param_init[1 +         i] += 0.1 * dir[i];
+                sol.param_init[1 + n_dim + i] += 0.1 * dir[i];
+            }
+            break;
+        }
+        
+        case bef_PnOK_f_merge: {
+            // Foci too close: nudge them apart
+            double dir[n_dim];
+            for (unsigned i = 0; i < n_dim; i++)
+                dir[i] = sol.param_init[1 + i] - sol.param_init[1 + n_dim + i];
+            vect_normalize(dir, n_dim);         // = direction from F1 to F0
+            
+            // Let's move both focal points 0.05 unit away from each other, along the major axis
+            for (unsigned i = 0; i < n_dim; i++) {
+                sol.param_init[1 +         i] += 0.05 * dir[i];
+                sol.param_init[1 + n_dim + i] -= 0.05 * dir[i];
+            }
+            break;
+        }
+        
+        case bef_PnOK_scale:                // scale factors out of range
+            for (unsigned i = 0; i < (n_dim - 2); i++)
+                sol.param_init[1 + 2*n_dim + i] = 1.0;  // reset them to 1
+            break;
+            
+        case bef_PnOK_fs2small: {
+            // focal sum too small (not an ellipsoid anymore)
+            double d[n_dim];
+            for (unsigned i = 0; i < n_dim; i++)
+                d[i] = sol.param_init[1 + i] - sol.param_init[1 + n_dim + i];
+            double f_dist = sqrt(vect_scalar_product(d, d, n_dim));
+            sol.param_init[0] = 1.5 * f_dist; // set focal sum to 1.5 * foci distance
+            break;
+        }
+        
+        default:
+            // can't handle multiple, failures (which should be unlikely)
+            return 0;
+    }
+    
+    if (sol.a_init == 0.0)
+        return bef_param_ok (sol.param_init, n_dim);
+    else
+        return bef_param_ok_sa (sol.param_init, n_dim);
 }
 
 int bin_ellipsoid_fit::solve()
     //
     // This performs one LSQ fit of the n-dimensional ellipsoid using the data collected so far.
-    // It is required that the nl_lsq_fit subsystem had been set up and was provided with a suitabe
-    // initial guess for the ellipsoid parameters. The Levenberg-Marquardt algorithm used is not very
-    // robust and can fail. The primary failure modes observed are:
-    //
-    // 1. The sigmoid shape factor <a> increases beyond utility. This is actually sensible from the
-    //    objective of a LSQ fit: the function being fitted is binay and the a large <a> will make the
-    //    approxmination more like a step function. However that is undesirable because it eliminates
-    //    any gradient towards a better fit and can lock in a sub-optimal fit. The P_ok() function
-    //    can jeject such solution, but LM will not change direction and after the lne search retry
-    //    count is exhausted, the LM fit will fail with a -3 return code. Often the solution at that
-    //    point is pretty good, and the fit may resume as if convergence was achieved.
-    //
-    // 2. The ellipsoid is squeezed out of the parameter space: This can happen if the parameter space
-    //    is constrained by external factors, for example JJ sizes smaller than x are not realizable,
-    //    but the circuit would actually work OK (or better) if small JJ's were used. In this case the
-    //    passing region extends beyond the limits of the parameter space. The LM solver then finds
-    //    solutions where one focal point moves out of the p-space. Eventually, the center of the
-    //    ellipsoid can move out of the p-space (= not all mapped parameters are within [0,1]) and
-    //    P_ok() will fail the invalid solution.
-    //
-    //  Recovery strategies:
-    //
-    //  a) for a <a> run-away: if the solution was close to convergence: accept the solution as valid
-    //                         if the solution has not converged, restart the LM fit but exclude <a>
-    //                         from being fitted. instead, gradually increase <a> from 1 to 30.
-    //  b) for ellipsoid escape: restart fit without <a>. However, this doesn't really address the underlying
-    //                         problem. A better mitigation strategy is to add synthetic fail points
-    //                         along the limiting hyperplane in the direction where the opbjective function
-    //                         shows no failures. 
-    //
-    // returns 0 on success, 1 on failure
+    // Because LM iterations are not very stable, a beam-search strategy is used: multiple starting
+    // points and fit types are used. Each solve tries several starting points. The best ones are 
+    // kept. The LM fitting process is far less expensive than doing data point collections, so
+    // multipl attemps at the fit are made and the best ones are kept.
     //
 {
-    static unsigned n_solve = 0;    // Just count the solver invocations. Used in warning and error messages
-    n_solve++;
+    if (solutions.size() <= 0) {
+        //
+        // There are no prior solution to draw from, so 3 starting points are created from
+        // the current, initial parameter set:
+        //  1. A regular fit one (wth sigmod shape factor <a> subject to the LSQ fit
+        //  2. A fit without <a> being fitted, rather kept it constant at 50
+        //  3. A fit with <a> being changed from 10 to 100 (if max iterations)
+        //
+        set_up_proto_solution(0.0, 0.0);
+        set_up_proto_solution(50.0, 0.0);
+        set_up_proto_solution(10.0, 0.5);
+    }
+    
+#ifdef _BIN_EFIT_DEBUG_
+    exp_pnts->print_stat(stdout);
+#endif
+    
+    for (unsigned i = 0; i < solutions.size(); i++)
+        solve_one(solutions[i]);                // Solve all current starting points
+        
+    qsort(solutions.data(), solutions.size(), sizeof(lm_solution), solution_key);
+    
+    while (solutions.size() > (n_best_solutions - 3)) {
+        //
+        // Delete worst solutions (up to 3) to make room for new ones
+        //
+        delete[] solutions.back().param_init;
+        delete[] solutions.back().param_final;
+        solutions.pop_back();
+    }
+    
+    unsigned n_data = exp_pnts->size();
+    for (unsigned i = 0; i < 3; i++)
+        derive_solution(solutions[i]);          // add up to 3 new solutions
+    if (exp_pnts->size() > n_data) {
+        //
+        // Synthetic data points were added to address ellipsoid escapes.
+        // Re-evaluate and re-sort all solutions.
+        //
+#ifdef _BIN_EFIT_DEBUG_
+        exp_pnts->print_stat(stdout);
+#endif
+        for (unsigned i = 0; i < solutions.size(); i++)
+            solve_one(solutions[i]);
+        qsort(solutions.data(), solutions.size(), sizeof(lm_solution), solution_key);    
+    }
 
-    e_params[n_e_params - 1] = 1.0;  // LM tends to make the edge too sharp and paints itself into a corner
-  
-    int ec = e_fit->init(e_params);
+    //
+    // Use best solution to go forward:
+    //
+    for (unsigned i = 0; i < n_e_params; i++)
+        e_params[i] = solutions[0].param_final[i];
+    for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
+        x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+
+    return solutions[0].ec;
+}
+
+void bin_ellipsoid_fit::solve_one(lm_solution &sol)
+//
+// Performs one nl-lsq fit using LM iteration.
+//
+// The pre-requisit is that sol->param_init is initialized to a viable starting point. If
+// <a_init> is > 0, then a fit without the sigmoid shape factor is performed.
+// All other fields of <sol> will be updated. The parameter arrays in <sol> must have been
+// allocated by the caller.
+//
+{
+    for (unsigned i = 0; i < n_e_params; i++)   // Copy the parameter set
+        e_params[i] = sol.param_init[i];
+    
+    double a = sol.a_init;
+    unsigned sans_a = a > 0.0;
+
+    int ec; 
+    if (sans_a)                                  // Initialize the fit system
+        ec = e_fit_sa->init(e_params);
+    else
+        ec = e_fit->init(e_params);
+
     if (ec != 0) {
         //
         // Note: this means that the parameter check function failed the current e_params set.
         //       This set is either the result of a previous solve, which means the P_ok() should have
-        //       checked them, whitch would expose a program bug, OR that the initial geuss for the 
+        //       checked them, whitch would expose a program bug, OR that the initial guess for the 
         //       did not meet the P_ok() requirements, which is also a bug.
         //
         fprintf(stderr, "The initial ellipse parameter estimation was not viable: bad P_ok()\n");
@@ -802,8 +1045,8 @@ int bin_ellipsoid_fit::solve()
     exp_pnts->print_stat(stdout);
 #endif
     
-    double cur_res, new_res;                // Current and new residuals
-    for (unsigned i = 0; i < n_lm_iteration; i++) { // One LM iteration
+    double cur_res, new_res;                    // Current and new (estimated) residuals
+    for (unsigned i = 0; i < n_lm_iteration; i++) {
         
         //
         // Add the data points to the fit system:
@@ -811,17 +1054,33 @@ int bin_ellipsoid_fit::solve()
         for (unsigned j = 0; j < exp_pnts->size(); j++) {
             if ((exp_pnts->meta(j) & bef_pnt_outlier) != 0ull)
                 continue;                       // skip outliers
-
-            double f = 0.0;
-            if (((exp_pnts->meta(j) & bef_pnt_value) != 0ull) &&    // If the value is 1
+                
+            double f = 0.0;                     // assume the datum is a fail
+            if (((exp_pnts->meta(j) & bef_pnt_value) != 0ull) &&    // IF the value is 1
                 ((exp_pnts->meta(j) & bef_convexified) == 0ull))    // AND this point is not convexified
-                f = 1.0;
-            ec = e_fit->add_datum(exp_pnts->value(j), f);
+                f = 1.0;                        // THEN the datum is a pass
+            if (sans_a) {
+                set_private_a(a);
+                a += sol.a_incr;
+                ec = e_fit_sa->add_datum(exp_pnts->value(j), f);
+            } else
+                ec = e_fit->add_datum(exp_pnts->value(j), f);
             assert(ec == 0);                    // adding data failing is a sign of a bug
         }
         
-        ec = e_fit->solve_1s(cur_res, new_res);
-        e_fit->get_params(e_params);            // retrieve the new ellipsoid parameters
+        if (sans_a) {                           // Perform one LM step and retrieve the new parameters
+            ec = e_fit_sa->solve_1s(cur_res, new_res);
+            e_fit_sa->get_params(sol.param_final); 
+        } else {
+            ec = e_fit->solve_1s(cur_res, new_res);
+            e_fit->get_params(sol.param_final);
+        }
+
+        if (i == 0)                             // record info
+            sol.begin_res = cur_res;
+        else
+            sol.end_res = cur_res;
+        sol.n_iter = i + 1;                    // +1 because iteration <i> just completed
         
 #ifdef _BIN_EFIT_DEBUG_
         printf(" %2u : cr= %.6lg  nr=%.6lg ec=%d - ", i,  cur_res, new_res, ec);
@@ -834,7 +1093,19 @@ int bin_ellipsoid_fit::solve()
             break;
     }
     
+    //
+    // LM fit completed (analysis and actions are performed by the caller)
+    //
+    sol.ec = ec;
+    sol.pok_fail = get_bef_param_nOK_reason();
+    
+    for (unsigned i = 0; i < n_e_params; i++)   // Copy the new parameter set
+        e_params[i] = sol.param_final[i];
+    for (unsigned i = 0; i < n_dim; i++)        // Debug and other code need x_start to be the e-center
+        x_start[i] = 0.5 * (e_params[1 + i] + e_params[1 + n_dim + i]);
+    
 #ifdef _BIN_EFIT_DEBUG_
+    static unsigned n_solve = 1;
     //
     // Print all hyper eillipsoids
     //
@@ -842,209 +1113,22 @@ int bin_ellipsoid_fit::solve()
         char buf[128];
         for (unsigned i = 0; i < (n_dim - 1); i++)
             for (unsigned j = i + 1; j < n_dim; j++) {
-                sprintf(buf, "bef_ellipsoid_s%u_%u_%u.dat", n_solve, i, j);
+                sprintf(buf, "bef_ellipsoid_%s%u_%u_%u.dat",
+                        (sans_a) ? "sa" : "s", n_solve, i, j);
                 bin_ellipsoid_fit::print_elliosoid(buf, i, j);
             }
-        sprintf(buf, "bef_ellipsoid_s%u_axis.dat", n_solve);
+        sprintf(buf, "bef_ellipsoid_%s%u_axis.dat", (sans_a) ? "sa" : "s", n_solve);
         print_e_major_axis(buf);
     }
+    n_solve++;
 #endif
-        
-    if (ec >= 0) {
-        //
-        // The LM has converged (ec == 1) or the number of LM iterations is exhausted (ec == 0), in
-        // which case the solution is likely OK.
-        //
-        if (ec == 0)
-            fprintf(stderr, "Solve %u: #of LM iterations exhausted. current/new residuals= %.6lg/%.6lg\n",
-                    n_solve, cur_res, new_res);
-
-        for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
-            x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
-        
-        for (unsigned i = 0; i < n_e_params; i++)
-            e_params_bak[i] = e_params[i];
-        return 0;
-    }
-    
-    if (ec == -3)
-        printf(">>> PoK fail = 0x%x\n", get_bef_param_nOK_reason());
-    
-    if ((ec == -3) &&                                   // Failed due to P_ok() inervention
-        (get_bef_param_nOK_reason() & (bef_PnOK_min_a | bef_PnOK_max_a)) &&
-                                                        // AND caused by the sigmoid shape factor ran away
-        (new_res <= cur_res) &&                         // AND progress was being made (aka not recovery)
-        ((cur_res - new_res) < 0.1) ) {                 // AND the expected residual change is pretty low
-        //
-        // Then this solution is good enough!
-        //
-        fprintf(stderr, "Solve %u: OK solution (<a> run-away recovery). current/new residuals= %.6lg/%.6lg\n",
-                n_solve, cur_res, new_res);
-        
-        for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
-            x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
-        
-        for (unsigned i = 0; i < n_e_params; i++)
-            e_params_bak[i] = e_params[i];
-
-        return 0;
-    }
-
-    //
-    // Plan A has failed, now trying recovery.
-    //
-    // Note: this recovery did not yet analyze which failure has happened. Ellipsoid escape need
-    //       code to add a wall of synthetic fail points to address the problem. That is TBD for now.
-    //
-    //
-    // Test if a foci was moved out of parameter space
-    //
-    if (get_bef_param_nOK_reason() & (bef_PnOK_f0_esc | bef_PnOK_f1_esc | bef_PnOK_cntr_esc)) {
-        build_wall(150);     // If so, try to fix this by adding synthetic fail points
-#ifdef _BIN_EFIT_DEBUG_
-        exp_pnts->print_stat(stdout);
-#endif
-        
-        double *f = nullptr;
-        if (get_bef_param_nOK_reason() & bef_PnOK_f0_esc)
-            f = e_params + 1;
-        else if (get_bef_param_nOK_reason() & bef_PnOK_f1_esc)
-            f = e_params + (1 + n_dim);
-        
-        if (f != nullptr) { // back off focal point towards the center
-            double dir[n_dim];
-            for (unsigned i = 0; i < n_dim; i++)
-                dir[i] = 0.5 - f[i];
-            vect_normalize(dir, n_dim);
-            // Let's move the offending focal point 0.1 unit towards the parameter space center
-            for (unsigned i = 0; i < n_dim; i++)
-                f[i] += 0.1 * dir[i];
-        } else {
-            // This is the case of the ellipsoid center escape. Nudge center towards p-space center
-            double dir[n_dim];
-            for (unsigned i = 0; i < n_dim; i++)
-                dir[i] = 0.5 - 0.5 * (e_params[1 + i] + e_params[1 + n_dim + i]);
-            vect_normalize(dir, n_dim);
-            // Let's move both focal points 0.1 unit towards the parameter space center
-            for (unsigned i = 0; i < n_dim; i++) {
-                e_params[1 +         i] += 0.1 * dir[i];
-                e_params[1 + n_dim + i] += 0.1 * dir[i];
-            }        
-        }
-    } else if (get_bef_param_nOK_reason() & bef_PnOK_fs2small) {
-        e_params[0] *= 1.5;             // Increase focal sum by 50%
-    } else {
-        // Go back to the last parameter set
-        for (unsigned i = 0; i < n_e_params; i++)
-            e_params[i] = e_params_bak[i];
-    }
-
-    set_private_a(1.0);
-    ec = e_fit_sa->init(e_params);
-    if (ec != 0) {
-        // OK, nudging did not work - try the back-up
-        for (unsigned i = 0; i < n_e_params; i++)
-            e_params[i] = e_params_bak[i];
-        ec = e_fit_sa->init(e_params);
-        assert(ec == 0);
-    }
-    
-    for (unsigned i = 0; i < n_lm_iteration; i++) { // One LM iteration
-        
-        //
-        // Add the data points to the fit system:
-        //
-        for (unsigned j = 0; j < exp_pnts->size(); j++) {
-            if ((exp_pnts->meta(j) & bef_pnt_outlier) != 0ull)
-                continue;                       // skip outliers
-                
-            double f = 0.0;
-            if (((exp_pnts->meta(j) & bef_pnt_value) != 0ull) &&    // If the value is 1
-                ((exp_pnts->meta(j) & bef_convexified) == 0ull))    // AND this point is not convexified
-            f = 1.0;
-            ec = e_fit_sa->add_datum(exp_pnts->value(j), f);
-            assert(ec == 0);                    // adding data failing is a sign of a bug
-        }
-        
-        ec = e_fit_sa->solve_1s(cur_res, new_res);
-        e_fit_sa->get_params(e_params);         // retrieve the new ellipsoid parameters
-        
-#ifdef _BIN_EFIT_DEBUG_
-        printf("SA %2u : cr= %.6lg  nr=%.6lg ec=%d - ", i,  cur_res, new_res, ec);
-        for (unsigned q = 0; q < (n_e_params - 1); q++)
-            printf(" %.4lg", e_params[q]);
-        printf("\n");
-#endif
-        if (ec != 0)
-            break;
-        
-        set_private_a(1.0 + 30.0 * (double) i / (double) n_lm_iteration);
-    }
-
-    if (ec >= -1) {
-        //
-        // The LM has converged (ec == 1) or the number of LM iterations is exhausted (ec == 0), in
-        // which case the solution is likely OK.
-        //
-        // The ec == -1 case (retry limit exhausted) is included here because it means that the LM was stuck
-        // is some local minima, but made some progress. 
-        //
-        if (ec == 0)
-            fprintf(stderr, "Solve %u: #of LM iterations exhausted. current/new residuals= %.6lg/%.6lg\n",
-                    n_solve, cur_res, new_res);
-            
-        for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
-            x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
-        
-        e_params[n_e_params - 1] = 1.0;
-        for (unsigned i = 0; i < n_e_params; i++)
-            e_params_bak[i] = e_params[i];
-        
-        #ifdef _BIN_EFIT_DEBUG_
-        //
-        // Print all hyper eillipsoids
-        //
-        for (unsigned i = 0; i < (n_dim - 1); i++)
-            for (unsigned j = i + 1; j < n_dim; j++) {
-                char buf[128];
-                sprintf(buf, "bef_ellipsoid_s%u_%u_%u.dat", n_solve, i, j);
-                bin_ellipsoid_fit::print_elliosoid(buf, i, j);
-            }
-            #endif
-            return 0;
-    }
-
-    if (ec == -3)
-        printf(">>> PoK fail = 0x%x\n", get_bef_param_nOK_reason());
-    
-    //
-    // No luck today, will try anyway
-    //
-    fprintf(stderr, "Solve %u: recovery failed - trying anyway. current/new residuals= %.6lg/%.6lg\n",
-            n_solve, cur_res, new_res);
-    for (unsigned i = 0; i < n_e_params; i++)
-        e_params[i] = e_params_bak[i];      // Go back to the back-up starting point
-    for (unsigned i = 0; i < n_dim; i++)    // relocate x_start to the new ellipsoid center
-        x_start[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
-
-#ifdef _BIN_EFIT_DEBUG_
-    //
-    // Print all hyper eillipsoids
-    //
-    {
-        char buf[128];
-        for (unsigned i = 0; i < (n_dim - 1); i++)
-            for (unsigned j = i + 1; j < n_dim; j++) {
-                sprintf(buf, "bef_ellipsoid_sa%u_%u_%u.dat", n_solve, i, j);
-                bin_ellipsoid_fit::print_elliosoid(buf, i, j);
-            }
-            sprintf(buf, "bef_ellipsoid_sa%u_axis.dat", n_solve);
-        print_e_major_axis(buf);
-    }
-#endif
-    
-    return 1;
 }
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Outlier filter:
+//
 
 struct outlier_rec {
     unsigned        ep_index;                   // Index to point in <exp_pnts>
