@@ -114,11 +114,13 @@ class bin_ellipsoid_fit {
     void                ray_search_mode1(double ds, double de, double *pnt, double *dir, unsigned n_probes);
                                                 // recursive probe functions
     void                estimate_initial_e_params(); // Make up an estimate for the fit to start from
-    void                set_up_proto_solution(double ai, double da); // creates a solution entity
-    void                derive_solution(lm_solution &sol); // derives a solution entity
-    unsigned            param_recovery(lm_solution &sol); // Fix failing parameter set
+    void                set_up_proto_solution(double ai, double da);    // creates a solution entity
+    void                derive_solution(lm_solution &sol);              // derives a solution entity
+    unsigned            param_recovery(lm_solution &sol);               // Fix failing parameter set (with margin)
+    unsigned            min_param_recovery(double *p_ptr, unsigned sa); // dito, but with minimal changes to parameters
     int                 solve();                // Perform the one fit iteration
     void                solve_one(lm_solution &sol); // Perform one LM LSQ fit
+    void                de_duplicate();         // removes duplicates
 
     void                reject_outliers();      // Filter out outliers
     void                e_shell_search(unsigned n, double a = 50.0); // explore points on the ellipsoid shell

@@ -8,7 +8,11 @@
 #include <eigen3/Eigen/Dense>
 
 extern const double max_a;                      // sigmoid shape factor upper limit
-                                                // purpose: exposed to allow diagosing LM convergence failures
+extern const double min_a;                      //  .. and lower limit
+                                                // purpose: dealing with fit parameter limits
+extern const double min_foci_d;                 // minimal foci distance
+extern const double gcs_min_scale;              // The gc scalefactor limits
+extern const double gcs_max_scale;              //  ..
 
 // bef_param_ok failure (not OK) explanation flags
 const unsigned  bef_PnOK_min_a    = 0x0001;     // <a> too small

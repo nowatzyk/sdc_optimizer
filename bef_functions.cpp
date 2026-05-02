@@ -30,7 +30,7 @@ const double GC_EPS = 1.0e-12;          // in gardiate correction this is a guar
 const double gcs_min_scale = 0.1;       // The gc scale factor lower limit
 const double gcs_max_scale = 10.0;      // The gc scale factor upper limit
 
-//#define _POK_ELLIPSOID_CENTER_ONLY_     // When defined, the ellipsoid foci may wander out of the
+#define _POK_ELLIPSOID_CENTER_ONLY_     // When defined, the ellipsoid foci may wander out of the
                                         // parameter space as long as the ellipsoid center remains inside.
                                         // This does not seem to be a good idea
                                         // Revise after D2_latch in 5D: It is *much* better. Turns
