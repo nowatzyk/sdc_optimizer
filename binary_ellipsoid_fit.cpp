@@ -511,11 +511,11 @@ void bin_ellipsoid_fit::ray_search_mode1(double ds, double de, double *pnt, doub
 //
 // There are a few notable approximations made here: the direction of the probe point from the ellipsoid center
 // are drawn from a uniform distribution on a n-dimensional hyper sphere: it isn't uniform on the 
-// ellipsoid, rather has lower density near the poles wrt the major axis. The secon approximation is that
+// ellipsoid, rather has lower density near the poles wrt the major axis. The second approximation is that
 // the distance to the ellipsoid surface is along the ray from the center, not perpendicular to the surface
 // and also different from the gradient corrected distance that is used in the ellipsoid definition used
 // by the fit. That is A-Ok, because all of this is a heuristic: there is no perfect way to do this, just
-// inifinitelt many heuristics: the milage varies with the actual shape of the Shmoo plot.
+// inifinitely many heuristics: the milage varies with the actual shape of the Shmoo plot.
 //
 // Note: the sigmoid shape factor <a> is explicit and not taken from the <e_params> vector. <a> should be 
 //       >= 50 initially and can be increased later when there there is a good fit.
@@ -1269,7 +1269,7 @@ void bin_ellipsoid_fit::solve_one(lm_solution &sol)
     for (unsigned i = 0; i < n_dim; i++)        // Debug and other code need x_start to be the e-center
         x_start[i] = 0.5 * (e_params[1 + i] + e_params[1 + n_dim + i]);
     
-#ifdef _BIN_EFIT_DEBUG_
+#ifdef _BIN_EFIT_DEBUG1_
     static unsigned n_solve = 1;
     //
     // Print all hyper eillipsoids
