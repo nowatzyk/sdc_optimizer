@@ -28,6 +28,7 @@ int yylex(void);
 %token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT PATTERN FOR
 %token MARGIN BO_BINARY BO_GRADIENT BO_PROBABILISTIC
 %token BO_N_RAYS BO_N_BRACKET BO_N_BISECT BO_THRESHOLD
+%token BO_BEF_BUDGET BO_BEF_ITER BO_BEF_PROBES
 
 %left TEST_OP OTHERWISE
 %left COMP_GT COMP_GE COMP_EQ COMP_LT COMP_LE COMP_NE
@@ -93,6 +94,9 @@ bo_attr :
     |   BO_N_BRACKET  NUMBER               { $$ = define_bo_attr(BO_ATTR_N_BRACKET,    $2); }
     |   BO_N_BISECT   NUMBER               { $$ = define_bo_attr(BO_ATTR_N_BISECT,     $2); }
     |   BO_THRESHOLD  NUMBER               { $$ = define_bo_attr(BO_ATTR_THRESHOLD,    $2); }
+    |   BO_BEF_BUDGET NUMBER               { $$ = define_bo_attr(BO_ATTR_BEF_BUDGET,   $2); }
+    |   BO_BEF_ITER   NUMBER               { $$ = define_bo_attr(BO_ATTR_BEF_ITER,     $2); }
+    |   BO_BEF_PROBES NUMBER               { $$ = define_bo_attr(BO_ATTR_BEF_PROBES,   $2); }
     ;
 
 bo_n_iter :                                 { $$ = 190.0; }

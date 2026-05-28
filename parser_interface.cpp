@@ -377,7 +377,11 @@ void define_bo(double n_itr, void *attr_list)
         unsigned n_bracket          = 10;    // bracket search steps per ray
         unsigned n_bisect           = 20;    // bisection steps per ray
         double   threshold          = 0.0;   // pass/fail boundary value
-
+        // bef_plan knobs (0 = use bef_plan defaults)
+        unsigned bef_budget         = 0;     // 0 = bef_plan default (no budget control)
+        unsigned bef_iter           = 0;     // 0 = bef_plan default (5 iterations)
+        unsigned bef_probes         = 0;     // 0 = bef_plan default (16 probes/ray)
+        
         for (struct bo_attr *a = (struct bo_attr *) attr_list; a != nullptr; a = a->next) {
             switch (a->type) {
                 case BO_ATTR_MARGIN:
@@ -409,6 +413,15 @@ void define_bo(double n_itr, void *attr_list)
                 case BO_ATTR_THRESHOLD:
                     threshold = a->value;
                     break;
+                case BO_ATTR_BEF_BUDGET:
+                    bef_budget = (unsigned) nearbyint(a->value);
+                    break;
+                case BO_ATTR_BEF_ITER:
+                    bef_iter = (unsigned) nearbyint(a->value);
+                    break;
+                case BO_ATTR_BEF_PROBES:
+                    bef_probes = (unsigned) nearbyint(a->value);
+                    break;
             }
         }
 
@@ -421,7 +434,8 @@ void define_bo(double n_itr, void *attr_list)
 
         unsigned n = (unsigned) nearbyint(n_itr);
         baysian_opt = new BOOptimizer(of_ptr, n, mode, submode,
-                                      n_rays, n_bracket, n_bisect, threshold);
+                                      n_rays, n_bracket, n_bisect, threshold,
+                                      bef_budget, bef_iter, bef_probes);
     }
 
 cleanup:

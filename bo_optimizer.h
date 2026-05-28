@@ -61,7 +61,10 @@ public:
                 unsigned   n_rays    = 0,       // 0 = auto
                 unsigned   n_bracket = 10,
                 unsigned   n_bisect  = 20,
-                double     threshold = 0.0);
+                double     threshold = 0.0,
+                unsigned   bef_budget  = 0,     // 0 = bef_plan default
+                unsigned   bef_iter    = 0,     // 0 = bef_plan default (5)
+                unsigned   bef_probes  = 0);    // 0 = bef_plan default (16));
 
     bool in_use()  { return configured; }
     void run(FILE *result_fp);                  // called from main()
@@ -80,7 +83,12 @@ private:
     unsigned    n_bracket;      // bracket search steps per ray
     unsigned    n_bisect;       // bisection steps per ray
     double      threshold;      // pass/fail boundary value
-
+    // bef_plan overrides (0 = use bef_plan defaults)
+    unsigned    bef_budget;     // total JoSIM budget for ellipsoid fit
+    unsigned    bef_iter;       // outer iteration count for ellipsoid fit
+    unsigned    bef_probes;     // probes per ray for ellipsoid fit
+    
+    
     void run_optimize    (FILE *result_fp, vector<const_parameter*> &opt_params, unsigned n);
     void run_robustness  (FILE *result_fp, vector<const_parameter*> &opt_params, unsigned n);
     void run_binary      (FILE *result_fp, vector<const_parameter*> &opt_params, unsigned n);

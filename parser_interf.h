@@ -56,7 +56,13 @@ typedef enum {
     BO_ATTR_N_RAYS,         // number of rays from x* for boundary search
     BO_ATTR_N_BRACKET,      // bracket search steps per ray
     BO_ATTR_N_BISECT,       // bisection steps per ray
-    BO_ATTR_THRESHOLD       // pass/fail boundary value (default 0.0)
+    BO_ATTR_THRESHOLD,      // pass/fail boundary value (default 0.0)
+    //
+    // bef_plan controls for the binary ellipsoid fit subsystem:
+    //
+    BO_ATTR_BEF_BUDGET,     // total JoSIM simulation budget for the ellipsoid fit
+    BO_ATTR_BEF_ITER,       // number of outer fit iterations (default 5)
+    BO_ATTR_BEF_PROBES      // probes per ray in the initial exploration (default 16)
 } bo_attr_type;
 
 struct bo_attr {

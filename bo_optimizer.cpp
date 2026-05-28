@@ -202,7 +202,10 @@ BOOptimizer::BOOptimizer(parameter *obf,
                          unsigned   n_r,
                          unsigned   n_brk,
                          unsigned   n_bis,
-                         double     thr)
+                         double     thr,
+                         unsigned   bef_bgt,
+                         unsigned   bef_itr,
+                         unsigned   bef_prb)
     : configured(true)
     , n_iterations(n_it)
     , mode(m)
@@ -213,7 +216,11 @@ BOOptimizer::BOOptimizer(parameter *obf,
     , n_bracket(n_brk)
     , n_bisect(n_bis)
     , threshold(thr)
+    , bef_budget(bef_bgt)
+    , bef_iter(bef_itr)
+    , bef_probes(bef_prb)
 {}
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -852,7 +859,17 @@ void BOOptimizer::run_robustness(FILE *result_fp,
                 // Adding this facility and choosing more sensible defaults is TBD
                 //
                 auto *bef = new bin_ellipsoid_fit(result_fp, opt_params, obj_funct, sum_fp);
-                bef->run();
+                if (bef_budget > 0) {
+                    // Build a plan from the pragma-specified budget and overrides.
+                    // n_dim = number of tuneable parameters.
+                    unsigned n_dim = (unsigned) opt_params.size();
+                    bef_plan plan(n_dim, bef_budget,
+                                  (bef_iter   > 0) ? bef_iter   : 5,
+                                  (bef_probes > 0) ? bef_probes : 16);
+                    bef->run(plan);
+                } else {
+                    bef->run();     // no budget specified: use bef_plan defaults
+                }
             }
             break;
         case SUBMODE_GRADIENT:

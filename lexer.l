@@ -63,6 +63,10 @@ YY_BUFFER_STATE get_current_buffer(void) {
 <IN_PRAGMA>"n_bisect"       { return BO_N_BISECT; }
 <IN_PRAGMA>"threshold"      { return BO_THRESHOLD; }
 
+<IN_PRAGMA>"bef_budget"     { return BO_BEF_BUDGET; }
+<IN_PRAGMA>"bef_iter"       { return BO_BEF_ITER; }
+<IN_PRAGMA>"bef_probes"     { return BO_BEF_PROBES; }
+
 <IN_PRAGMA>"parameter"      { return PARAMETER; }
 
 <IN_PRAGMA>"monitor"        { return MONITOR; }
