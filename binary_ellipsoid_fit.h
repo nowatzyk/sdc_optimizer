@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <assert.h>
+#include <time.h>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,7 @@ extern "C" {                                    // The fit-component functions a
 
 #include "nl_lsq_fit.h"
 #include "bef_functions.h"
+#include "bef_plan.h"
 
 #include "eval_cache.h"
 #include "loop_complex.h"
@@ -105,7 +107,20 @@ class bin_ellipsoid_fit {
     vector<const_parameter *>& opt_params;      // The actual parametes to be expolred
     parameter           *of_ptr;                // The objective function: >0 is pass, fail otherwise (inc. NAN)
     FILE                *sum_fp;                // Logs all evalualtion
-    
+
+    //
+    // Timing members for run-time estimate (set in constructor, used in run())
+    //
+    struct timespec     t_ctor_start_;          // Wall-clock time at start of constructor
+    struct timespec     t_ctor_end_;            // Wall-clock time at end of constructor (after initial explore)
+    unsigned            n_ctor_sims_;           // #of simulations run during initial exploration
+
+    //
+    // Active plan pointer -- set at the start of run(), cleared at the end.
+    // nullptr outside of run().
+    //
+    const bef_plan      *plan_;
+
     unsigned            eval_pnt(double *pnt, int *ind = nullptr);  // Evaluate one point
     void                explore(double *pnt);   // Explore the passing region from <pnt>
     void                ray_search(double *pnt, double *dir);
@@ -127,7 +142,6 @@ class bin_ellipsoid_fit {
     void                hp_filter();            // Hyper-plane convexifier
     int                 build_wall(unsigned n); // Adds synthetic points to discurage ellipsoid escape
     
-    unsigned            n_iterations;           // #of LM-fitting steps to be performed
     unsigned            n_rays;                 // #of extra rays to cast
     unsigned            n_candidates;           // #of candidates to consider per non-axis ray
     unsigned            n_probes_p_ray;         // #of probes per ray (search budget)
@@ -148,19 +162,35 @@ class bin_ellipsoid_fit {
                                                 // same, but in ellipsoid coordinates: scalling is applied
 
 public:
+    //
+    // Constructor: allocate data structures, validate the start point, and
+    // run the initial axis-aligned exploration. Does NOT run the fit loop.
+    // Call run() after construction (with an optional plan) to do the work.
+    //
+    // The old constructor parameters (n_iter, n_ray_mul, n_can, n_p_p_ray, outl_frac)
+    // are now supplied via bef_plan. Default values are preserved as plan defaults
+    // so existing call sites can migrate incrementally:
+    //
+    //   Old:  new bin_ellipsoid_fit(fp, params, of, sfp, 5, 3, 32, 16, 0.05);
+    //   New:  auto *b = new bin_ellipsoid_fit(fp, params, of, sfp);
+    //         b->run();                             // uses all defaults
+    //   Or:   bef_plan plan(n_dim, budget);         // budget-controlled plan
+    //         b->run(plan);
+    //
     bin_ellipsoid_fit (FILE *result_fp,         // where to place the results
                        vector<const_parameter*> &opt_params,  // the parameters that need to optimized
                        parameter *of_ptr,       // pointer to the objective function
-                       FILE *sum_fp,            // Passed on to the loop complex to log the smulation outputs
-                       unsigned n_iter = 5,     // #of relocations of the ellipsoid / lsq fitting steps
-                       unsigned n_ray_mul = 3,  // multiply the #of parameter by this number to get the 
-                                                // number of extra (beyond 2 per axis) rays to cast
-                       unsigned n_can = 32,     // #of randomly choosen candidates from which to choose
-                                                // the best direction for an extra ray to cast
-                       unsigned n_p_p_ray = 16, // #of points to probe for each ray
-                       double outl_frac = 0.05  // Outlier fraction (default is 5%, or 1 in 20) 
+                       FILE *sum_fp             // Passed on to the loop complex to log the smulation outputs
                        );
 
+    //
+    // run() -- execute the fit loop.
+    //
+    // Uses the supplied plan for all tuning parameters. If no plan is given,
+    // a default plan is used that matches the previously hardcoded values:
+    //   n_iter=5, n_ray_mul=3, n_candidates=32, n_probes_per_ray=16, outlier_frac=0.05
+    //
+    void run(const bef_plan &plan = bef_plan());
 };
 
 

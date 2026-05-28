@@ -118,13 +118,17 @@ void explored_points::print_stat(FILE *fp)
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Constructor: allocate, validate start point, initial exploration.
+// Does NOT run the fit loop -- call run() for that.
+//
 
-
-bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>& op, parameter *of_p,
-                                     FILE *s_fp, unsigned n_itr, unsigned n_ray_mul, unsigned n_can,
-                                     unsigned n_p_p_ray, double of) :
-    result_fp(result_fp), opt_params(op), of_ptr(of_p), sum_fp(s_fp)
+bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* rfp, vector<const_parameter *>& op, parameter *of_p,
+                                     FILE *s_fp) :
+    result_fp(rfp), opt_params(op), of_ptr(of_p), sum_fp(s_fp), plan_(nullptr)
 {
+    clock_gettime(CLOCK_MONOTONIC, &t_ctor_start_);  // record start time for timing estimate in run()
+
     n_dim = opt_params.size();
     
     // save start point:
@@ -136,11 +140,16 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
     ev_cache = new EvalCache(n_dim);
     exp_pnts = new explored_points(n_dim);
 
-    n_rays = n_ray_mul * n_dim;
-    n_candidates = n_can;
-    n_probes_p_ray = n_p_p_ray;
-    n_iterations = n_itr;
-    outlier_frac = of;
+    //
+    // Set defaults for exploration parameters.
+    // run() will override these from the plan when called.
+    // The defaults here match the previously hardcoded constructor argument defaults,
+    // so any call site that does new bin_ellipsoid_fit(...); bef->run(); is unchanged.
+    //
+    n_rays         = 3 * n_dim;     // was n_ray_mul=3
+    n_candidates   = 32;            // was n_can=32
+    n_probes_p_ray = 16;            // was n_p_p_ray=16
+    outlier_frac   = 0.05;          // was outl_frac=0.05
 
     ray_dirs = new double[n_rays * n_dim];
     
@@ -159,19 +168,68 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
 
     estimate_initial_e_params();                // make up an initial fit parameter estimate
 
-    
     e_fit = new nl_lsq_fit(n_e_params, n_dim, 1,
                            bef_function_ptr, bef_diff_function_ptr, bef_param_ok, n_dim, 0);
     e_fit_sa = new nl_lsq_fit(n_e_params - 1, n_dim, 1,
                            bef_function_ptr_sa, bef_diff_function_ptr_sa, bef_param_ok_sa, n_dim, 0);
-    
+
     //
-    // Now the actual work is done here. It is modular, so it could beacome a separate module...
+    // Record wall-clock time and simulation count at end of construction so
+    // run() can estimate how long the remaining iterations will take.
+    //
+    clock_gettime(CLOCK_MONOTONIC, &t_ctor_end_);
+    n_ctor_sims_ = exp_pnts->size();
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// run() -- execute the fit loop using the given plan.
+//
+
+void bin_ellipsoid_fit::run(const bef_plan &plan)
+{
+    plan_ = &plan;                              // make plan accessible to all private methods
+
+    //
+    // Apply plan values, reallocating ray_dirs if the plan calls for more rays
+    // than were allocated with defaults in the constructor.
+    //
+    // If the plan has no budget (default-constructed), keep the constructor defaults
+    // to preserve backwards compatibility.
+    //
+    if (plan.n_extra_rays > 0) {
+        if (plan.n_extra_rays > n_rays) {
+            delete[] ray_dirs;
+            ray_dirs = new double[plan.n_extra_rays * n_dim];
+        }
+        n_rays         = plan.n_extra_rays;
+        n_candidates   = plan.n_candidates;
+        n_probes_p_ray = plan.n_probes_per_ray;
+        outlier_frac   = plan.outlier_frac;
+    }
+
+#ifdef _BIN_EFIT_DEBUG_
+    plan.print(stdout, n_dim);
+#endif
+
+    //
+    // Determine iteration count from plan, falling back to the constructor default.
+    //
+    unsigned n_iterations = (plan.n_iter > 0) ? plan.n_iter : 5;
+
+    //
+    // Main fit loop.
+    //
+    // Iteration 0: initial exploration was already done in the constructor.
+    //              Just run the first solve.
+    // Iterations 1..n_iterations-1: shell search -> outlier rejection ->
+    //                                hp_filter (if i>1) -> solve.
     //
     for (unsigned i = 0; i < n_iterations; i++) {
         if (i > 0) {
             //explore(x_start);
-            e_shell_search(600);  // <a> should be faily large!
+            unsigned n_shell = (plan.n_shell_probes > 0) ? plan.n_shell_probes : 600;
+            e_shell_search(n_shell, plan.shell_a);  // <a> should be fairly large!
             reject_outliers();
             if (i > 1)
                 hp_filter();
@@ -179,6 +237,17 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
         int ec = solve();
         if (ec < 0)
             printf("iteration %u completed with ec=%d\n", i + 1, ec);
+
+        //
+        // After the first iteration, estimate how long the remaining iterations will take.
+        // The wall-clock time of the initial exploration (done in the constructor) gives
+        // a reliable per-simulation estimate since shell-search simulations cost the same.
+        //
+        if (i == 0 && n_iterations > 1 && n_ctor_sims_ > 0) {
+            double t_explore_s = (t_ctor_end_.tv_sec  - t_ctor_start_.tv_sec) +
+                                  (t_ctor_end_.tv_nsec - t_ctor_start_.tv_nsec) * 1e-9;
+            plan.estimate_remaining_time(t_explore_s, n_ctor_sims_, n_dim);
+        }
     }
     print_results();
     
@@ -203,6 +272,8 @@ bin_ellipsoid_fit::bin_ellipsoid_fit(FILE* result_fp, vector<const_parameter *>&
         fclose(of);
     }
 #endif
+
+    plan_ = nullptr;                            // run() complete; plan no longer active
 }
 
 unsigned bin_ellipsoid_fit::eval_pnt(double *pnt, int *ind)
@@ -511,11 +582,11 @@ void bin_ellipsoid_fit::ray_search_mode1(double ds, double de, double *pnt, doub
 //
 // There are a few notable approximations made here: the direction of the probe point from the ellipsoid center
 // are drawn from a uniform distribution on a n-dimensional hyper sphere: it isn't uniform on the 
-// ellipsoid, rather has lower density near the poles wrt the major axis. The second approximation is that
+// ellipsoid, rather has lower density near the poles wrt the major axis. The secon approximation is that
 // the distance to the ellipsoid surface is along the ray from the center, not perpendicular to the surface
 // and also different from the gradient corrected distance that is used in the ellipsoid definition used
 // by the fit. That is A-Ok, because all of this is a heuristic: there is no perfect way to do this, just
-// inifinitely many heuristics: the milage varies with the actual shape of the Shmoo plot.
+// inifinitelt many heuristics: the milage varies with the actual shape of the Shmoo plot.
 //
 // Note: the sigmoid shape factor <a> is explicit and not taken from the <e_params> vector. <a> should be 
 //       >= 50 initially and can be increased later when there there is a good fit.
@@ -1269,7 +1340,7 @@ void bin_ellipsoid_fit::solve_one(lm_solution &sol)
     for (unsigned i = 0; i < n_dim; i++)        // Debug and other code need x_start to be the e-center
         x_start[i] = 0.5 * (e_params[1 + i] + e_params[1 + n_dim + i]);
     
-#ifdef _BIN_EFIT_DEBUG1_
+#ifdef _BIN_EFIT_DEBUG_
     static unsigned n_solve = 1;
     //
     // Print all hyper eillipsoids

@@ -851,7 +851,8 @@ void BOOptimizer::run_robustness(FILE *result_fp,
                 // but this needs to be controllable from the spice deck.
                 // Adding this facility and choosing more sensible defaults is TBD
                 //
-                new bin_ellipsoid_fit(result_fp, opt_params, obj_funct, sum_fp);
+                auto *bef = new bin_ellipsoid_fit(result_fp, opt_params, obj_funct, sum_fp);
+                bef->run();
             }
             break;
         case SUBMODE_GRADIENT:
