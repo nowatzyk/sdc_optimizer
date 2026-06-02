@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cassert>
 #include <vector>
+
+#include "expression.h"
+
 using namespace std;
 
 
@@ -99,10 +102,32 @@ class time_pattern {
     nodes_of_interest   *noi_ptr;           // NOI to which this pattern applies
     static vector<time_pattern *> all_tps;  // The collection of time patterns
     
-    vector<double>      pattern;            // The actual pattern
+    vector<double>      times;              // The actual pattern
     double              t_last;             // time of the end of the last interval
+
+    // Expression-valued time storage (replaces the pre-evaluated double vector
+    // for patterns defined via the new expression syntax).
+    //
+    // Each entry is (expression*, is_relative):
+    //   is_relative=0: expression evaluates to an absolute time
+    //   is_relative=1: expression evaluates to a delta added to the previous time
+    //
+    // add_time(double) wraps the value in a constant expression for backward compat.
+    // get_times() evaluates all expressions, resolves relative deltas, validates
+    // monotonicity, and returns the resulting absolute times.
     
+    struct time_expr_entry {
+        expression  *expr;
+        unsigned     is_relative;
+    };
+    vector<time_expr_entry>  time_exprs;    // expression-valued time list
+
 public:
+    void   add_time_expr(expression *e, unsigned is_relative); // add expression entry
+    vector<double> get_times() const;       // evaluate and return absolute times
+    
+    const char *get_name() const {return name; };
+
     time_pattern(char *nm, nodes_of_interest *np);
     void add_time(double tt);               // Adds a transition time
     static time_pattern *find(const char *name); // Finds a pattern via name loop-up (linear search)

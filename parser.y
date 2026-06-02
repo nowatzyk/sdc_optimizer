@@ -17,6 +17,9 @@ int yylex(void);
     double val;
     void   *pointer;
     unsigned flags;
+    struct {
+        void *t_rise, *t_fall, *t_width, *v_high, *v_low;
+    } pwl_ctrl;
 }
     
 %token <text> END LINE SYMBOL PSUBSTITUTION
@@ -24,9 +27,11 @@ int yylex(void);
 %type <pointer> expr terminal range opt_range pattern p_time bo_attr_list bo_attr
 %type <flags> attribute attributes
 %type <val> bo_n_iter
+%type <pwl_ctrl> pwl_attrs
 %token TRAN EOL PRAGMA SCAN MONITOR COMMENT PARAMETER EQUAL COMMA SET OSQB CSQB INCLUDE
 %token SIM_ANNEAL SA_SCHEDULE SNAPSHOT LSQ_FIT NO_PRINT LOG_MAP TUNEABLE BAYSIAN_OPT PATTERN FOR
 %token MARGIN BO_BINARY BO_GRADIENT BO_PROBABILISTIC
+%token PWL PWL_RISE PWL_FALL PWL_WIDTH PWL_HIGH PWL_LOW
 %token BO_N_RAYS BO_N_BRACKET BO_N_BISECT BO_THRESHOLD
 %token BO_BEF_BUDGET BO_BEF_ITER BO_BEF_PROBES
 
@@ -63,6 +68,10 @@ pragma_body:
                                             { define_param_expression($2, $4, $5, $6); }
     |   PARAMETER SYMBOL SET NUMBER opt_range attributes
                                             { define_param_constant($2, $4, $5, $6); }
+    |   PARAMETER SYMBOL PWL SYMBOL pwl_attrs  { define_param_pwl($2, $4,
+                                                    $5.t_rise, $5.t_fall,
+                                                    $5.t_width, $5.v_high,
+                                                    $5.v_low); }
     |   MONITOR SYMBOL                      { define_monitor($2); }
     |   SNAPSHOT SYMBOL NUMBER COMMA NUMBER { define_snapshot($2, $3, $5); }
     |   LSQ_FIT SYMBOL NUMBER COMMA expr COMMA expr  { define_lsq_fit($2, $3, $5, $7); }
@@ -109,8 +118,8 @@ pattern:
     ;
 
 p_time:
-        NUMBER                              { $$ = define_p_term(0, $1); }           
-    |   PLUS NUMBER                         { $$ = define_p_term(1, $2); }
+        expr                                { $$ = define_p_term(0, $1); }
+    |   PLUS expr                           { $$ = define_p_term(1, $2); }
     |   OSQB pattern CSQB NUMBER            { $$ = define_p_rep($2, $4); }
     ;
 
@@ -155,7 +164,22 @@ terminal:
     |   SYMBOL OPAR SYMBOL COMMA expr CPAR  { $$ = define_function2($1, $3, $5); }
     |   SYMBOL                              { $$ = define_ref($1); }
     ;
-        
+
+//
+// pwl_attrs -- the five control value expressions for a PWL parameter.
+// Keywords may appear in any order; each sets one field in the pwl_ctrl struct.
+// A missing keyword leaves the field as nullptr, which define_param_pwl()
+// will catch and report as an error.
+//
+pwl_attrs :                             { $$.t_rise=$$.t_fall=$$.t_width=
+                                          $$.v_high=$$.v_low=NULL; }
+    |   pwl_attrs PWL_RISE  expr        { $$ = $1; $$.t_rise  = $3; }
+    |   pwl_attrs PWL_FALL  expr        { $$ = $1; $$.t_fall  = $3; }
+    |   pwl_attrs PWL_WIDTH expr        { $$ = $1; $$.t_width = $3; }
+    |   pwl_attrs PWL_HIGH  expr        { $$ = $1; $$.v_high  = $3; }
+    |   pwl_attrs PWL_LOW   expr        { $$ = $1; $$.v_low   = $3; }
+    ;
+
 %%
 
 void yyerror(const char *s) {

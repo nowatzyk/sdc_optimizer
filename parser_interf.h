@@ -33,9 +33,23 @@ struct f2_table {                           // Function pointer f2_table
     enum function_type  f_type;             // used to find the correct object pointer
 };
 
+//
+// p_time_element -- one element of a time pattern list.
+//
+// The time is now stored as an expression pointer so that pattern times can be
+// parameterised and evaluated at deck-assembly time.
+//
+// is_relative == 0: time_expr evaluates to an absolute time
+// is_relative == 1: time_expr evaluates to a delta added to the previous time
+//
+// Note: the old representation used a negative double to signal relative times.
+//       This is replaced by an explicit flag so that expressions can produce
+//       any numeric value without ambiguity.
+//
 struct p_time_element {
-    double              time;               // Boundary time (if negative: a relative time)
-    struct p_time_element *next;            // Pointer to the next
+    void               *time_expr;          // expression* -- evaluated at deck-assembly time
+    unsigned            is_relative;        // 0 = absolute, 1 = relative (+delta)
+    struct p_time_element *next;
 };
 
 extern struct units unit_table[];           // Common SI scale identifiers
@@ -57,9 +71,7 @@ typedef enum {
     BO_ATTR_N_BRACKET,      // bracket search steps per ray
     BO_ATTR_N_BISECT,       // bisection steps per ray
     BO_ATTR_THRESHOLD,      // pass/fail boundary value (default 0.0)
-    //
     // bef_plan controls for the binary ellipsoid fit subsystem:
-    //
     BO_ATTR_BEF_BUDGET,     // total JoSIM simulation budget for the ellipsoid fit
     BO_ATTR_BEF_ITER,       // number of outer fit iterations (default 5)
     BO_ATTR_BEF_PROBES      // probes per ray in the initial exploration (default 16)
@@ -85,6 +97,9 @@ void define_tran(double t_incr, double t_stop, double t_start, double dT_max);
 void define_param_scan(char *name, void *rng, double n_steps, unsigned flags);
 void define_param_constant(char *name, double value, void *rng, unsigned flags);
 void define_param_expression(char *name, void *expr, void *rng, unsigned flags);
+void define_param_pwl(char *name, char *pattern_name,
+                      void *t_rise, void *t_fall, void *t_width,
+                      void *v_high, void *v_low);
 void *define_range(double from, double to);
 
 void define_sim_anneal(char *log_file_nm);
@@ -100,7 +115,7 @@ void *define_bo_attr(int type, double value);
 
 void define_pattern(char *name, char *noi, void *p);
 void *define_p_cat(void *p1, void *p2);
-void *define_p_term(unsigned rel, double t);
+void *define_p_term(unsigned rel, void *expr);  // expr is expression*
 void *define_p_rep(void *t, double n);
 
 void *define_add(void *x, void *y);

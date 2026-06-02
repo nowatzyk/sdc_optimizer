@@ -193,6 +193,47 @@ void define_param_expression(char *name, void* expr, void *rng, unsigned flags)
     new expr_parameter(name, (expression *) expr, v_min, v_max, flags & 1);
 }
 
+void define_param_pwl(char *name, char *pattern_name,
+                      void *t_rise, void *t_fall, void *t_width,
+                      void *v_high, void *v_low)
+//
+// Creates a pwl_parameter that generates a SPICE PWL waveform string from a
+// named time pattern when the spice deck is assembled.
+//
+// The five control expressions are evaluated lazily at deck-assembly time and
+// may reference any previously-defined parameter.
+//
+{
+    if (parameter::find_parameter(name) != nullptr) {
+        fprintf(stderr, "Line %d: redefinition of '%s'\n", yylineno, name);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    time_pattern *pat = time_pattern::find(pattern_name);
+    if (pat == nullptr) {
+        fprintf(stderr, "Line %d: pattern '%s' is not defined\n",
+                yylineno, pattern_name);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    if (!t_rise || !t_fall || !t_width || !v_high || !v_low) {
+        fprintf(stderr,
+                "Line %d: pwl parameter '%s': one or more control expressions "
+                "failed to parse\n", yylineno, name);
+        yy_n_parse_err++;
+        return;
+    }
+    
+    new pwl_parameter(name, pat,
+                      (expression *) t_rise,
+                      (expression *) t_fall,
+                      (expression *) t_width,
+                      (expression *) v_high,
+                      (expression *) v_low);
+}
+
 void define_param_constant(char *name, double value, void *rng, unsigned flags)
 // Defines a new constant type parameter that might be tunable
 {
@@ -625,20 +666,27 @@ void *define_p_cat(void *p1, void *p2)
     return p1;
 }
 
-void *define_p_term(unsigned rel, double t)
+void *define_p_term(unsigned rel, void *expr_ptr)
+//
+// Create one p_time_element from an expression.
+// rel=0: absolute time (expression evaluates to an absolute time in seconds)
+// rel=1: relative time (expression evaluates to a delta added to the previous time)
+//
+// The expression is NOT evaluated here -- it is stored and evaluated lazily
+// at deck-assembly time, which allows it to reference tunable parameters.
+//
 {
-    struct p_time_element *t_ptr = (struct p_time_element *) malloc(sizeof(struct p_time_element));
-    t_ptr->next = nullptr;
-    t_ptr->time = NAN;
+    struct p_time_element *t_ptr =
+    (struct p_time_element *) malloc(sizeof(struct p_time_element));
+    t_ptr->time_expr  = expr_ptr;   // expression* -- evaluated at deck-assembly time
+    t_ptr->is_relative = rel;
+    t_ptr->next       = nullptr;
     
-    if (t < 0.0) {
-        fprintf(stderr, "Line %d: time step must be >= 0\n", yylineno);
+    if (expr_ptr == nullptr) {
+        // This means define_ref() failed upstream -- the error was already reported.
+        // Leave time_expr as nullptr; define_pattern() will skip nullptr elements.
         yy_n_parse_err++;
-        return t_ptr;
     }
-    
-    if (rel) t_ptr->time = -t;
-    else     t_ptr->time =  t;
     
     return t_ptr;
 }
@@ -661,7 +709,8 @@ void *define_p_rep(void *t, double n)
         struct p_time_element *r_ptr = t_ptr;
         do {
             struct p_time_element *n_ptr = (struct p_time_element *) malloc(sizeof(struct p_time_element));
-            n_ptr->time = r_ptr->time;
+            n_ptr->time_expr  = r_ptr->time_expr;   // share the expression (no deep copy needed)
+            n_ptr->is_relative = r_ptr->is_relative;
             n_ptr->next = nullptr;
             m_ptr->next = n_ptr;
             m_ptr = n_ptr;
@@ -693,19 +742,16 @@ void define_pattern(char *name, char *noi, void *p)
     
     t_ptr = new time_pattern(name, noi_ptr);
     
-    double t = -__DBL_MAX__;
+    //
+    // Store expression pointers in the pattern rather than evaluating now.
+    // Evaluation happens at deck-assembly time via time_pattern::get_times().
+    // We cannot validate monotonicity at parse time since expression values
+    // are not known until the parameters are set.
+    //
     struct p_time_element *te_ptr = (struct p_time_element *) p;
     while (te_ptr != nullptr) {
-        if (te_ptr->time < 0.0) t -= te_ptr->time;
-        else if (te_ptr->time <= t) {
-            fprintf(stderr, "Line %d: time must be monotonically increasing (use +dt for relative time)\n",
-                    yylineno);
-            yy_n_parse_err++;
-            return;             // Yeah, leaks memory, but will be aborting, so who cares.
-        } else
-            t = te_ptr->time;
-        t_ptr->add_time(t);
-        
+        if (te_ptr->time_expr != nullptr)
+            t_ptr->add_time_expr((expression *) te_ptr->time_expr, te_ptr->is_relative);
         struct p_time_element *n_ptr = te_ptr->next;
         free(te_ptr);
         te_ptr = n_ptr;

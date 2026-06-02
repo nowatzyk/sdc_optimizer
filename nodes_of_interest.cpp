@@ -652,13 +652,6 @@ time_pattern::time_pattern(char* nm, nodes_of_interest* np) : name(nm), noi_ptr(
     all_tps.push_back(this);
 }
 
-void time_pattern::add_time(double tt)
-{
-    assert((tt >= 0.0) && (tt > t_last));
-    t_last = tt;
-    pattern.push_back(tt);
-}
-
 time_pattern * time_pattern::find(const char* name)
 {
     for (unsigned i = 0; i < all_tps.size(); i++)
@@ -684,7 +677,7 @@ unsigned time_pattern::cnt_missmatches(vector<double>& t_ev)
     unsigned ec = 0;                    // event counter
     
     do {                                // loop over intervals
-        tnp1 = (ic < pattern.size()) ? pattern[ic++] : __DBL_MAX__;
+        tnp1 = (ic < times.size()) ? times[ic++] : __DBL_MAX__;
         events_expected ^= 1;
         //
         // In the interval [tn, tnp1) should be <events_expected> events
@@ -707,11 +700,76 @@ unsigned time_pattern::cnt_missmatches(vector<double>& t_ev)
         if (events_expected != event_count) n_mismatches++;
         
         tn = tnp1;                      // Move to the next interval
-    } while (ic < pattern.size());
+    } while (ic < times.size());
         
     return n_mismatches;
 }
 
+void time_pattern::add_time_expr(expression *e, unsigned is_relative)
+{
+    time_expr_entry te;
+    te.expr        = e;
+    te.is_relative = is_relative;
+    time_exprs.push_back(te);
+}
+
+// Update add_time() to also add to time_exprs for consistency:
+void time_pattern::add_time(double t)
+{
+    assert((t >= 0.0) && (t > t_last));
+    t_last = t;
+    times.push_back(t);                     // keep for existing callers (match_peaks etc.)
+    time_expr_entry te;
+    te.expr        = new expression(t);     // wrap constant in expression
+    te.is_relative = 0;                     // absolute
+    time_exprs.push_back(te);
+}
+
+vector<double> time_pattern::get_times() const
+//
+// Evaluate all time expressions, resolve relative deltas, validate monotonicity.
+// Called by pwl_parameter::print_to_file() at deck-assembly time.
+//
+{
+    vector<double> result;
+    double t_abs = 0.0;
+    
+    for (const auto &te : time_exprs) {
+        if (te.expr == nullptr)
+            continue;                       // skip nullptrs from failed parses
+            
+        double dt = te.expr->get_value();
+        if (!isfinite(dt)) {
+            fprintf(stderr,
+                    "time_pattern '%s': expression evaluated to NAN -- skipping\n",
+                    get_name());
+            continue;
+        }
+        if (dt < 0.0) {
+            fprintf(stderr,
+                    "time_pattern '%s': time expression evaluated to %.4g < 0 -- skipping\n",
+                    get_name(), dt);
+            continue;
+        }
+        
+        if (te.is_relative)
+            t_abs += dt;
+        else
+            t_abs = dt;
+        
+        if (!result.empty() && t_abs <= result.back()) {
+            fprintf(stderr,
+                    "time_pattern '%s': time %.4gp is not monotonically increasing "
+                    "(previous was %.4gp) -- skipping\n",
+                    get_name(), t_abs * 1e12, result.back() * 1e12);
+            continue;
+        }
+        
+        result.push_back(t_abs);
+    }
+    
+    return result;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 

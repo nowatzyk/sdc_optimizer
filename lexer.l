@@ -53,6 +53,13 @@ YY_BUFFER_STATE get_current_buffer(void) {
 
 <IN_PRAGMA>"baysian_opt"    { return BAYSIAN_OPT; }
 
+<IN_PRAGMA>"pwl"            { return PWL; }
+<IN_PRAGMA>"rise"           { return PWL_RISE; }
+<IN_PRAGMA>"fall"           { return PWL_FALL; }
+<IN_PRAGMA>"width"          { return PWL_WIDTH; }
+<IN_PRAGMA>"high"           { return PWL_HIGH; }
+<IN_PRAGMA>"low"            { return PWL_LOW; }
+
 <IN_PRAGMA>"margin"         { return MARGIN; }
 <IN_PRAGMA>"binary"         { return BO_BINARY; }
 <IN_PRAGMA>"gradient"       { return BO_GRADIENT; }

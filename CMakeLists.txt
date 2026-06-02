@@ -28,7 +28,7 @@ add_executable(csv_analyzer
     fit_functions.c
     anneal.cpp
     xrand.cpp
-    parameter.cpp
+    parameter.cpp pwl_parameter.cpp
     eval_cache.cpp
     bo_optimizer.cpp
     expression.cpp sum_expression.cpp min_expression.cpp max_expression.cpp

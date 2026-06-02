@@ -51,13 +51,13 @@ void spice_elements::print(FILE *of)
             break;
 
         case parameter:
-            v = par.param->get_cur_value();
-            if (!isfinite(v)) {
-                fprintf(stderr, "Reference to '%s' parameter yieded NAN in run %u\n",
-                        par.param->get_name(), n_josim_runs);
-                exit(1);
-            }
-            fprintf(of, "%.12lg", v);
+            //
+            // Delegate to print_to_file() so that pwl_parameter can emit a
+            // multi-token string while numeric parameters emit a single number.
+            // The NAN check and error handling for numeric parameters is now
+            // inside parameter::print_to_file() (the default implementation).
+            //
+            par.param->print_to_file(of);
             break;
 
         case new_line:
