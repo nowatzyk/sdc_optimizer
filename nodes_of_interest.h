@@ -101,9 +101,6 @@ class time_pattern {
     const char          *name;              // Name of this pattern
     nodes_of_interest   *noi_ptr;           // NOI to which this pattern applies
     static vector<time_pattern *> all_tps;  // The collection of time patterns
-    
-    vector<double>      times;              // The actual pattern
-    double              t_last;             // time of the end of the last interval
 
     // Expression-valued time storage (replaces the pre-evaluated double vector
     // for patterns defined via the new expression syntax).

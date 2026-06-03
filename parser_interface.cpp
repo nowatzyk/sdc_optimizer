@@ -703,7 +703,7 @@ void *define_p_rep(void *t, double n)
     
     struct p_time_element *l_ptr = t_ptr;  // Pointer to the last element
     while (l_ptr->next != nullptr)         // finds the end of the list
-        l_ptr->next = l_ptr;
+        l_ptr = l_ptr->next;
     
     for (struct p_time_element *m_ptr = l_ptr; i > 0; i--) { // replicate n times 
         struct p_time_element *r_ptr = t_ptr;

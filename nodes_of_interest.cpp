@@ -647,7 +647,7 @@ double count_edges(void *obj_ptr, double x)
 // Time pattern stuff
 //
 
-time_pattern::time_pattern(char* nm, nodes_of_interest* np) : name(nm), noi_ptr(np), t_last(-1.0)
+time_pattern::time_pattern(char* nm, nodes_of_interest* np) : name(nm), noi_ptr(np)
 {
     all_tps.push_back(this);
 }
@@ -671,11 +671,12 @@ unsigned time_pattern::cnt_missmatches(vector<double>& t_ev)
     
     double t_event = -__DBL_MAX__;      // Time of event
     
-    unsigned events_expected = 1;       // The first interval shall have no event
+    unsigned events_expected = 1;       // The first interval shall have no event (to be inverted: 1 means NO event)
     
     unsigned ic = 0;                    // Interval counter
     unsigned ec = 0;                    // event counter
     
+    vector<double> times = get_times(); // Retrieve the actual (current)  time pattern
     do {                                // loop over intervals
         tnp1 = (ic < times.size()) ? times[ic++] : __DBL_MAX__;
         events_expected ^= 1;
@@ -710,18 +711,6 @@ void time_pattern::add_time_expr(expression *e, unsigned is_relative)
     time_expr_entry te;
     te.expr        = e;
     te.is_relative = is_relative;
-    time_exprs.push_back(te);
-}
-
-// Update add_time() to also add to time_exprs for consistency:
-void time_pattern::add_time(double t)
-{
-    assert((t >= 0.0) && (t > t_last));
-    t_last = t;
-    times.push_back(t);                     // keep for existing callers (match_peaks etc.)
-    time_expr_entry te;
-    te.expr        = new expression(t);     // wrap constant in expression
-    te.is_relative = 0;                     // absolute
     time_exprs.push_back(te);
 }
 
