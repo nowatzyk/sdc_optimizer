@@ -248,6 +248,22 @@ void bin_ellipsoid_fit::run(const bef_plan &plan)
                                   (t_ctor_end_.tv_nsec - t_ctor_start_.tv_nsec) * 1e-9;
             plan.estimate_remaining_time(t_explore_s, n_ctor_sims_, n_dim);
         }
+#ifdef _BIN_EFIT_DEBUG_        
+        {
+            //
+            // This produces postscrip diagrams that show the n-dimensional ellipsoid where each
+            // panel is a 2D projection on a plane defined by a pair of dimensions (tuning parameters.
+            // The data poonts are projected onto this cutting planes that go through the ellipsoid
+            // center. Points are omitted if they are more than 20% (0.2) away from the cutting plane.
+            // This is done to somewhat un-clutter the data. The fraction can be raised to 1 (all points).
+            // The data points are shown as filled circles with a radius that shrinks with the distance 
+            // to the cutting plane.
+            //
+            char buf[64];
+            sprintf(buf, "bef_e_planes_%u", i);
+            print_all(buf, 0.2);
+        }
+#endif
     }
     print_results();
     
@@ -1701,6 +1717,157 @@ void  bin_ellipsoid_fit::print_elliosoid(char *fn, unsigned x, unsigned y)
     fclose(of);
 }
 
+static const unsigned print_all_boarder = 50;
+static const unsigned print_all_s_size = 1000;      // size of one sub-plot: 50pxl boarder, 1000x1000 work
+static const double   print_all_dot_size = 20.0;
+
+void bin_ellipsoid_fit::print_all(char *bfn, double z_cut_off)
+//
+// Produces a postsctiop plot of all 2D projections
+//
+{
+    char *buf = new char[10 + strlen(bfn)];
+    sprintf(buf, "%s_all.ps", bfn);
+    FILE *ofp = fopen(buf, "w");
+    assert (ofp);
+    delete [] buf;
+    
+    fprintf(ofp, "%%!PS-Adobe-2.0\n");
+    fprintf(ofp, "%%%%Title: %s all 2d projections\n", bfn);
+    fprintf(ofp, "%%%%BoundingBox: 0 0 %u %u\n", (print_all_s_size + 2 * print_all_boarder) * n_dim,
+            (print_all_s_size + 2 * print_all_boarder) * n_dim);
+
+    fprintf(ofp, "/adot {\nnewpath\n 0 360 arc\nclosepath\nfill\n} def\n"); // makes a dot: x y r adot
+
+    //
+    // Generate the sub-plots
+    //
+    for (unsigned iy = 0; iy < n_dim; iy++)
+        for (unsigned ix = 0; ix < n_dim; ix++)
+            if (ix != iy)
+                print_one (ix, iy, ofp, z_cut_off);
+    
+    fprintf(ofp, "showpage\n");
+    fprintf(ofp, "%%EOF\n");
+    fclose(ofp);
+}
+
+void bin_ellipsoid_fit::print_one(unsigned ix, unsigned iy, FILE *of, double z_cut_off)
+{
+    double xo = (double) ix * (double) (print_all_s_size + 2 * print_all_boarder) + (double) print_all_boarder;
+    double yo = (double) iy * (double) (print_all_s_size + 2 * print_all_boarder) + (double) print_all_boarder;
+    
+    //
+    // Plot boarder
+    //
+    fprintf(of, "0 0 0 setrgbcolor\n0.5 setlinewidth\nnewpath\n");
+    fprintf(of, "%.3lf %.3lf moveto\n", xo, yo);
+    fprintf(of, "%.3lf %.3lf lineto\n", xo + (double) print_all_s_size, yo);
+    fprintf(of, "%.3lf %.3lf lineto\n", xo + (double) print_all_s_size, yo + (double) print_all_s_size);
+    fprintf(of, "%.3lf %.3lf lineto\n", xo, yo + (double) print_all_s_size);
+    fprintf(of, "closepath\nstroke\n");
+    
+    //
+    // Plot ellipsoid in red
+    //
+    fprintf(of, "1 0 0 setrgbcolor\n0.5 setlinewidth\nnewpath\n");
+    
+    double cntr[n_dim];
+    double dir[n_dim];
+    for (unsigned i = 0; i < n_dim; i++)  {     // Find center of ellipsoid
+        cntr[i] = (e_params[1 + i] + e_params[1 + n_dim + i]) * 0.5;
+        dir[i] = 0.0;
+    }
+
+    double t = 0.0;
+    double dt = (2.0 * M_PI) / (double) (n_ellipsoid_pnts - 1);
+    // It is intended that the first and last point overlap so that the line is closed
+    
+    for (unsigned i = 0; i < n_ellipsoid_pnts; i++) {
+        sincos(t, dir + iy, dir + ix);
+        double dist;
+        int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, dist);
+        assert(ec == 0);
+        
+        double x = cntr[ix] + dist * dir[ix];
+        if (ix >= 2) 
+            x = (x - cntr[ix]) / e_params[1 + 2*n_dim + (ix - 2)] + cntr[ix];
+        
+        double y = cntr[iy] + dist * dir[iy];
+        if (iy >= 2) 
+            y = (y - cntr[iy]) / e_params[1 + 2*n_dim + (iy - 2)] + cntr[iy];
+
+        fprintf(of, "%.3lf %.3lf %s\n", xo + x * (double) print_all_s_size, yo + y * (double) print_all_s_size,
+                (i == 0) ? "moveto" : "lineto");
+        t += dt;
+    }
+    fprintf(of, "closepath\nstroke\n");
+    
+    //
+    // Plot the data points:
+    //
+    double dz_max = 1.0e-6;             // just to prevent dz_max from being 0
+    for (unsigned i = 0; i < exp_pnts->size(); i++) {   // Look for the max distance from the cutting plane
+        double z = 0.0;
+        for (unsigned j = 0; j < n_dim; j++) {
+            if ((j == ix) || (j == iy)) continue;
+            double t =  exp_pnts->value(i)[j] - cntr[j];
+            z += t * t;
+        }
+        z = sqrt(z);            // is distance to the plane of the ellipsoid/projection-plane cut
+        dz_max = fmax(z, dz_max);
+    }
+    
+    for (unsigned i = 0; i < exp_pnts->size(); i++) {
+        
+        double z = 0.0;
+        for (unsigned j = 0; j < n_dim; j++) {
+            if ((j == ix) || (j == iy)) continue;
+            double t =  exp_pnts->value(i)[j] - cntr[j];
+            z += t * t;
+        }
+        z = sqrt(z);                // is distance to the plane of the ellipsoid/projection-plane cut
+        
+        z = fmin(1.0, z / dz_max);  // Normalize z to be in [0,1]
+        
+        if (z > z_cut_off)
+            continue;               // Ignore data points if they are too far from the cut plane
+        
+        if (z < 0.01) z = print_all_dot_size;                   // map it to a log-like function of the distance
+        else z = -print_all_dot_size * log10(z) * 0.5;
+
+        switch (exp_pnts->meta(i)) {
+            case 0:                     // Plain fail
+                fprintf(of, "1 0 0 setrgbcolor\n");             // Red dot 
+                break;
+                
+            case bef_pnt_value:         // Plain pass
+                fprintf(of, "0 1 0 setrgbcolor\n");             // Green dot 
+                break;
+                
+            case bef_pnt_squashed:      // Squashed or outlier
+            case bef_pnt_squashed | bef_pnt_value:
+            case bef_pnt_outlier:
+            case bef_pnt_outlier | bef_pnt_value:
+                fprintf(of, "0 0 1 setrgbcolor\n");             // Blue dot
+                break;
+                
+            case bef_convexified:       // convexified
+            case bef_convexified | bef_pnt_value:
+                fprintf(of, "1 0 1 setrgbcolor\n");             // Purple dot
+                break;
+                
+            default:
+                continue;                                       // Ignore other
+        }
+        
+        double x = xo + exp_pnts->value(i)[ix] * (double) print_all_s_size;
+        double y = yo + exp_pnts->value(i)[iy] * (double) print_all_s_size;
+        
+        fprintf(of, "%.3lf %.3lf %.3lf adot\n", x, y, z);       // z is the radius of the dot
+    }
+}
+
 void  bin_ellipsoid_fit::print_e_major_axis(char *fn)
 {
     FILE *of = fopen(fn, "w");
@@ -1719,7 +1886,7 @@ void  bin_ellipsoid_fit::print_e_major_axis(char *fn)
     int ec = ellipsoid_intersect(e_params, n_dim, cntr, dir, d0, &d1);
     assert(ec == 0);
     
-    print_a_point(of, cntr);                        // Point 1: ellisoid center
+    print_a_point(of, cntr);                           // Point 1: ellisoid center
     print_a_point_ec(of, e_params + 1);                // Point 2: f0
     print_a_point_ec(of, cntr, dir, -0.5 * fc_d);      // Point 3: should be the same!
     print_a_point_ec(of, e_params + 1 + n_dim);        // Point 4: f1

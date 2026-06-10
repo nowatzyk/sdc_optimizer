@@ -157,6 +157,11 @@ class bin_ellipsoid_fit {
     void                print_e_major_axis(char *fn);   // a debugging aid
                                                 // Outputs a file with the point along the major
                                                 // ellipsoid axis
+
+    void                print_all(char *bfn, double z_cut_off = 1.0);   // Yet another debugging aid:
+                                                // Draws all ellipsoids in unscaled [0,1] space for all dimension pairs
+    void                print_one(unsigned ix, unsigned iy, FILE *of, double z_cut_off);  // used by above
+    
     void                print_a_point(FILE *of, const double *pnt, const double *off = nullptr, double d = 0.0);
     void                print_a_point_ec(FILE *of, const double *pnt, const double *off = nullptr, double d = 0.0);
                                                 // same, but in ellipsoid coordinates: scalling is applied
