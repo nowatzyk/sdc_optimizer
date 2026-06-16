@@ -639,7 +639,6 @@ void bin_ellipsoid_fit::e_shell_search(unsigned n, double a)
         }
         d_e = sqrt(vect_scalar_product(dir, dir, n_dim));  // correct distance in scaled coordinates
         vect_normalize(dir, n_dim);             // re-normalize dir (including effect of scaling)
-        
         double d_c = clip_to_unity(x_start, dir, n_dim);
         assert(d_c > 0.0);                      // x_start ought to be within the legal parameter space
         
@@ -1819,6 +1818,9 @@ void bin_ellipsoid_fit::print_one(unsigned ix, unsigned iy, FILE *of, double z_c
     }
     
     for (unsigned i = 0; i < exp_pnts->size(); i++) {
+        
+        if ((ix < iy) != is_inside_ellipsoid(e_params, n_dim, exp_pnts->value(i)))
+            continue;
         
         double z = 0.0;
         for (unsigned j = 0; j < n_dim; j++) {

@@ -626,6 +626,42 @@ int ellipsoid_intersect (
     return 1;
 }
 
+unsigned is_inside_ellipsoid (
+    const double *param,                // Defines the ellipsoid (see above)
+    unsigned n_dim,                     // #of dimensions
+    const double *point)                // point to be tested
+    //
+    // Returns 1 if the point is inside the ellipsoid, 0 otherwise.
+    //
+    // Note: this function does takes the scaling factors into account
+    //
+{
+    double fs  = param[0];
+    const double *f0 = param + 1;
+    const double *f1 = param + 1 + n_dim;
+    
+    double *s_point = new double[n_dim]; // scaled point, in elliosoid centric coordinates
+    for (unsigned i = 0; i < n_dim; i++) {
+        s_point[i] = point[i];
+        if (i < 2)
+            continue;
+        double c = 0.5 * (f0[i] + f1[i]);   // Center of ellipsoid 
+        s_point[i] = (point[i] - c) * param[1 + 2*n_dim + (i - 2)] + c;
+    }
+    
+    double l0 = 0.0, l1 = 0.0;
+    for(unsigned i = 0; i < n_dim; i++) {
+        double t = s_point[i] - f0[i];
+        l0 += t * t;
+        t = s_point[i] - f1[i];
+        l1 += t * t;
+    }
+    
+    delete[] s_point;
+    
+    return fs >= (sqrt(l0) + sqrt(l1));
+}
+
 Eigen::MatrixXd completeOrthogonalBasis(const Eigen::VectorXd &e1)
 //
 // Given a unit vector e1 (the major axis direction),

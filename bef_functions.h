@@ -53,6 +53,12 @@ int ellipsoid_intersect (
     double *dist_n = nullptr                    // Optional: distance to the shell in the negative direction
 );
 
+unsigned is_inside_ellipsoid (
+    const double *param,                        // Defines the ellipsoid (see above)
+    unsigned n_dim,                             // #of dimensions
+    const double *point                         // n-dimensional point to be tested
+);
+
 double vect_scalar_product(const double *va, const double *vb, unsigned n_dim);
 void vect_normalize(double *vect, unsigned n_dim);
 void generate_random_dir(double *dir, unsigned n_dim);
