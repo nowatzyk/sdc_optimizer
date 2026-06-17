@@ -1212,7 +1212,7 @@ int bin_ellipsoid_fit::solve()
     
     unsigned n_data = exp_pnts->size();
     unsigned n_sol = solutions.size();
-    for (unsigned i = 0; i < 4; i++)
+    for (unsigned i = 0; (i < 4) && (i < n_sol); i++)
         derive_solution(solutions[i]);          // add derived solutions: Note it may add more than 1 per call
     if (exp_pnts->size() > n_data)              // data points were added
         n_sol = 0;                              // need to re-do previous solves
@@ -1355,7 +1355,7 @@ void bin_ellipsoid_fit::solve_one(lm_solution &sol)
     for (unsigned i = 0; i < n_dim; i++)        // Debug and other code need x_start to be the e-center
         x_start[i] = 0.5 * (e_params[1 + i] + e_params[1 + n_dim + i]);
     
-#ifdef _BIN_EFIT_DEBUG_
+#ifdef _BIN_EFIT_DEBUG_PAH_
     static unsigned n_solve = 1;
     //
     // Print all hyper eillipsoids
